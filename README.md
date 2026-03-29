@@ -2,7 +2,9 @@
 
 > **Candidate**: Wuor Bhang  
 > **Feature Branch**: `feature`  
-> **Live Demo**: [https://hris-assessment-bhang.vercel.app](https://hris-assessment-bhang.vercel.app)  
+> **Live Demo**: [https://hris-nvb3m4x88-wuor-bhangs-projects.vercel.app/login](https://hris-nvb3m4x88-wuor-bhangs-projects.vercel.app/login)
+> **Demon users login account**
+> *Email: konexio@demoassessment.com* | *Password: konexio@demoassessment.com*
 > **Submission Date**: March 2026  
 
 ## Installation
