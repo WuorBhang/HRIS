@@ -34,6 +34,7 @@ const EMPTY_FORM = {
   department: "",
   startDate: "",
   employmentStatus: "active",
+  email: "",
 };
 
 export default function Employees() {
@@ -91,6 +92,7 @@ export default function Employees() {
       department: emp.department || "",
       startDate: emp.startDate || "",
       employmentStatus: emp.employmentStatus || "active",
+      email: emp.email || "",
     });
     setEditing(emp);
     setShowForm(true);
@@ -111,6 +113,7 @@ export default function Employees() {
         await addDoc(collection(db, "employees"), {
           ...form,
           employerId: user.uid,
+          email: form.email || "",
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         });
@@ -226,6 +229,9 @@ export default function Employees() {
                       Department
                     </th>
                     <th className="text-left px-4 py-3 font-semibold text-gray-600">
+                      Email
+                    </th>
+                    <th className="text-left px-4 py-3 font-semibold text-gray-600">
                       Start Date
                     </th>
                     <th className="text-left px-4 py-3 font-semibold text-gray-600">
@@ -262,6 +268,9 @@ export default function Employees() {
                       </td>
                       <td className="px-4 py-3 text-gray-600">
                         {emp.department || "—"}
+                      </td>
+                      <td className="px-4 py-3 text-gray-600 truncate max-w-[200px]">
+                        {emp.email || "—"}
                       </td>
                       <td className="px-4 py-3 text-gray-600">
                         {emp.startDate || "—"}
@@ -351,6 +360,16 @@ export default function Employees() {
                   required
                   className="input-field"
                   placeholder="e.g. Software Engineer"
+                />
+              </FormField>
+              <FormField label="Employee Email *" required>
+                <input
+                  type="email"
+                  value={form.email}
+                  onChange={(e) => setForm({ ...form, email: e.target.value })}
+                  required
+                  className="input-field"
+                  placeholder="e.g. jane.doe@company.com"
                 />
               </FormField>
               <FormField label="Department *" required>

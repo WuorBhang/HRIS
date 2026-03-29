@@ -146,7 +146,7 @@ export default function Documents() {
             "x-admin-secret": "hris-internal-2026",
           },
           body: JSON.stringify({
-            to: user.email,
+            to: employee?.email || user.email,
             employeeFullName: employee?.fullName || "Unknown",
             fileName: file.name,
             uploadedAt: new Date().toLocaleString(),
