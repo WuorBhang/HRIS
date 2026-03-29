@@ -14,8 +14,8 @@ admin.initializeApp();
 setGlobalOptions({ maxInstances: 10 });
 
 const ADMIN_SECRET = process.env.ADMIN_SECRET || "hris-internal-2026";
-const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY;
-const SENDGRID_FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL;
+const SENDGRID_API_KEY = functions.config().sendgrid.key;
+const SENDGRID_FROM_EMAIL = functions.config().sendgrid.from_email;
 
 if (SENDGRID_API_KEY) {
   sgMail.setApiKey(SENDGRID_API_KEY);
