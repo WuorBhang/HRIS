@@ -1,0 +1,31 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // Deny all unauthenticated access — belt-and-suspenders baseline
+    // Prevents anonymous enumeration or download of any file in the bucket
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+
+    // Documents path: Documents/{employerId}/{employeeId}/{YYYY-MM}/{filename}.pdf
+    //
+    // Only the owning employer may read/write their own documents.
+    // Prevents Employer A from accessing Employer B's files by simply guessing a path,
+    // because the employerId segment is validated against the authenticated user's UID.
+    match /Documents/{employerId}/{allPaths=**} {
+
+      // Prevents unauthenticated download even if someone guesses the storage path
+      allow read: if request.auth != null
+        && request.auth.uid == employerId;
+
+      // Prevents an employer from uploading files under a different employer's UID path
+      allow write: if request.auth != null
+        && request.auth.uid == employerId
+        // Enforce PDF-only uploads by MIME type — prevents disguised executable uploads
+        && request.resource.contentType == 'application/pdf'
+        // Enforce 10MB max file size — prevents storage exhaustion / denial of service
+        && request.resource.size <= 10 * 1024 * 1024;
+    }
+  }
+}

@@ -1,0 +1,76 @@
+mutation CreateDemoData @transaction @auth(level: USER, insecureReason: "This is a seed mutation and is safe to run as any authenticated user for testing purposes.") {
+  user_insertMany(data: [
+    {
+      id: "550e8400-e29b-41d4-a716-446655440000",
+      displayName: "Alice Smith",
+      email: "alice@example.com",
+      createdAt: "2024-01-01T10:00:00Z"
+    },
+    {
+      id: "550e8400-e29b-41d4-a716-446655440001",
+      displayName: "Bob Johnson",
+      email: "bob@example.com",
+      createdAt: "2024-01-01T10:05:00Z"
+    }
+  ])
+  tag_insertMany(data: [
+    {
+      id: "550e8400-e29b-41d4-a716-446655440002",
+      userId: "550e8400-e29b-41d4-a716-446655440000",
+      name: "Work",
+      createdAt: "2024-01-01T10:10:00Z"
+    },
+    {
+      id: "550e8400-e29b-41d4-a716-446655440003",
+      userId: "550e8400-e29b-41d4-a716-446655440000",
+      name: "Personal",
+      createdAt: "2024-01-01T10:11:00Z"
+    },
+    {
+      id: "550e8400-e29b-41d4-a716-446655440004",
+      userId: "550e8400-e29b-41d4-a716-446655440001",
+      name: "Projects",
+      createdAt: "2024-01-01T10:12:00Z"
+    }
+  ])
+  entry_insertMany(data: [
+    {
+      id: "550e8400-e29b-41d4-a716-446655440005",
+      userId: "550e8400-e29b-41d4-a716-446655440000",
+      content: "Finish report by EOD.",
+      createdAt: "2024-01-01T10:15:00Z",
+      entryDate: "2024-01-01"
+    },
+    {
+      id: "550e8400-e29b-41d4-a716-446655440006",
+      userId: "550e8400-e29b-41d4-a716-446655440000",
+      content: "Buy groceries.",
+      createdAt: "2024-01-01T10:20:00Z",
+      entryDate: "2024-01-01"
+    },
+    {
+      id: "550e8400-e29b-41d4-a716-446655440007",
+      userId: "550e8400-e29b-41d4-a716-446655440001",
+      content: "Review project proposal.",
+      createdAt: "2024-01-01T10:25:00Z",
+      entryDate: "2024-01-01"
+    }
+  ])
+  entryTag_insertMany(data: [
+    {
+      entryId: "550e8400-e29b-41d4-a716-446655440005",
+      tagId: "550e8400-e29b-41d4-a716-446655440002",
+      createdAt: "2024-01-01T10:30:00Z"
+    },
+    {
+      entryId: "550e8400-e29b-41d4-a716-446655440006",
+      tagId: "550e8400-e29b-41d4-a716-446655440003",
+      createdAt: "2024-01-01T10:31:00Z"
+    },
+    {
+      entryId: "550e8400-e29b-41d4-a716-446655440007",
+      tagId: "550e8400-e29b-41d4-a716-446655440004",
+      createdAt: "2024-01-01T10:32:00Z"
+    }
+  ])
+}

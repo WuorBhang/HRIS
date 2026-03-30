@@ -1,0 +1,53 @@
+query ListAllEntries @auth(level: USER, insecureReason: "This operation is safe to expose to all logged in users.") {
+  entries {
+    id
+    content
+    createdAt
+    entryDate
+    user {
+      id
+      displayName
+    }
+    tags_via_EntryTag {
+      id
+      name
+    }
+  }
+}
+
+query GetEntryById($id: UUID!) @auth(level: USER, insecureReason: "This operation is safe to expose to all logged in users.") {
+  entry(id: $id) {
+    id
+    content
+    createdAt
+    entryDate
+    user {
+      id
+      displayName
+      email
+    }
+    entryTags_on_entry {
+      tag {
+        id
+        name
+      }
+    }
+  }
+}
+
+mutation CreateNewEntry($content: String!, $entryDate: Date!) @auth(level: USER) {
+  entry_insert(data: {
+    userId_expr: "auth.uid",
+    content: $content,
+    createdAt_expr: "request.time",
+    entryDate: $entryDate
+  })
+}
+
+mutation AddTagToEntry($entryId: UUID!, $tagId: UUID!) @auth(level: USER) {
+  entryTag_insert(data: {
+    entryId: $entryId,
+    tagId: $tagId,
+    createdAt_expr: "request.time"
+  })
+}
