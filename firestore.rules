@@ -1,37 +1,78 @@
 rules_version = '2';
-
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Users can read/write their own user profile
-    match /userProfiles/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
-      // Admins can read/write all user profiles
-      allow read, write: if request.auth != null && request.auth.token.role == 'admin';
+
+    // Helper: verify user is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
     }
 
-    // Employers can manage their employees
+    // Helper: read role from Custom Claims (NOT Firestore — prevents client-side privilege escalation)
+    function hasRole(role) {
+      return isAuthenticated() && request.auth.token.role == role;
+    }
+
+    function isAdmin() {
+      return hasRole('admin');
+    }
+
+    function isEmployerOrAbove() {
+      return isAuthenticated() && request.auth.token.role in ['admin', 'it-expert', 'employer'];
+    }
+
+    // Prevents a client from spoofing createdAt on update
+    function createdAtUnchanged() {
+      return !('createdAt' in request.resource.data) ||
+        request.resource.data.createdAt == resource.data.createdAt;
+    }
+
+    // Employees collection
+    // Prevents Employer A from reading/writing Employer B's employees by
+    // enforcing that employerId must match the authenticated user's UID.
     match /employees/{employeeId} {
-      allow read, write: if request.auth != null &&
-        request.auth.token.role == 'employer' &&
-        resource.data.employerId == request.auth.uid;
-      // Admins and IT experts can read all employees
-      allow read: if request.auth != null &&
-        (request.auth.token.role == 'admin' || request.auth.token.role == 'it-expert');
+      allow read: if isAdmin() ||
+        (isEmployerOrAbove() && resource.data.employerId == request.auth.uid);
+
+      // Employer can only create employees under their own UID
+      allow create: if isEmployerOrAbove() &&
+        request.resource.data.employerId == request.auth.uid;
+
+      // Employer can only update their own employees; cannot change createdAt or employerId
+      allow update: if isEmployerOrAbove() &&
+        resource.data.employerId == request.auth.uid &&
+        createdAtUnchanged() &&
+        request.resource.data.employerId == resource.data.employerId;
+
+      // Only admin or owning employer can delete
+      allow delete: if isAdmin() ||
+        (hasRole('employer') && resource.data.employerId == request.auth.uid);
     }
 
-    // Employers can manage their documents
-    match /documents/{documentId} {
-      allow read, write: if request.auth != null &&
-        request.auth.token.role == 'employer' &&
-        resource.data.uploadedBy == request.auth.uid;
-      // Admins and IT experts can read all documents
-      allow read: if request.auth != null &&
-        (request.auth.token.role == 'admin' || request.auth.token.role == 'it-expert');
+    // userProfiles — pending account creation queue (admin only)
+    // Prevents non-admins from creating or reading account records
+    match /userProfiles/{docId} {
+      allow read, write: if isAdmin();
     }
 
-    // Allow authenticated users to read their own data
-    match /users/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+    // pendingUsers — same as above
+    match /pendingUsers/{docId} {
+      allow read, write: if isAdmin();
+    }
+
+    // Documents metadata (for file uploads)
+    // Prevents an employer from reading another employer's document metadata
+    match /documents/{docId} {
+      allow read: if isAdmin() ||
+        (isAuthenticated() && resource.data.uploadedBy == request.auth.uid);
+      allow create: if isEmployerOrAbove() &&
+        request.resource.data.uploadedBy == request.auth.uid;
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // Deny everything else — belt-and-suspenders catch-all
+    match /{document=**} {
+      allow read, write: if false;
     }
   }
 }
