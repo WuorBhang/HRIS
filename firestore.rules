@@ -2,8 +2,36 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /{document=**} {
-      allow read, write: if false;
+    // Users can read/write their own user profile
+    match /userProfiles/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+      // Admins can read/write all user profiles
+      allow read, write: if request.auth != null && request.auth.token.role == 'admin';
+    }
+
+    // Employers can manage their employees
+    match /employees/{employeeId} {
+      allow read, write: if request.auth != null &&
+        request.auth.token.role == 'employer' &&
+        resource.data.employerId == request.auth.uid;
+      // Admins and IT experts can read all employees
+      allow read: if request.auth != null &&
+        (request.auth.token.role == 'admin' || request.auth.token.role == 'it-expert');
+    }
+
+    // Employers can manage their documents
+    match /documents/{documentId} {
+      allow read, write: if request.auth != null &&
+        request.auth.token.role == 'employer' &&
+        resource.data.uploadedBy == request.auth.uid;
+      // Admins and IT experts can read all documents
+      allow read: if request.auth != null &&
+        (request.auth.token.role == 'admin' || request.auth.token.role == 'it-expert');
+    }
+
+    // Allow authenticated users to read their own data
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
     }
   }
 }
