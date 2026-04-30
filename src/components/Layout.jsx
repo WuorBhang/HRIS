@@ -1,185 +1,204 @@
+import { useEffect, useState } from "react";
+import { Link, useLocation } from "wouter";
+import {
+  LayoutDashboard,
+  Users,
+  FileText,
+  FolderClosed,
+  Coins,
+  CalendarDays,
+  ScrollText,
+  Settings,
+  LogOut,
+  Menu,
+  X,
+} from "lucide-react";
 import { useAuth } from "../context/AuthContext";
-import { useLocation } from "wouter";
-import { useState } from "react";
+import { ROLES } from "../lib/constants";
 
-const NAV_BY_ROLE = {
-  admin: [
-    { label: "Dashboard", path: "/dashboard", icon: "🏠" },
-    { label: "User Management", path: "/admin/users", icon: "👤" },
-    { label: "Contracts", path: "/admin/contracts", icon: "📋" },
-    { label: "Documents", path: "/admin/documents", icon: "📄" },
-    { label: "Salary Advances", path: "/admin/salary-advances", icon: "💰" },
-    { label: "Public Holidays", path: "/admin/holidays", icon: "🗓️" },
-    { label: "Audit Logs", path: "/admin/audit", icon: "🔍" },
-    { label: "My Profile", path: "/profile", icon: "⚙️" },
+const navByRole = {
+  [ROLES.ADMIN]: [
+    { to: "/admin/dashboard", label: "Dashboard", icon: LayoutDashboard },
+    { to: "/admin/users", label: "User Management", icon: Users },
+    { to: "/admin/contracts", label: "Contracts", icon: FileText },
+    { to: "/admin/documents", label: "Documents", icon: FolderClosed },
+    { to: "/admin/salary-advances", label: "Salary Advances", icon: Coins },
+    {
+      to: "/admin/public-holidays",
+      label: "Public Holidays",
+      icon: CalendarDays,
+    },
+    { to: "/admin/audit-logs", label: "Audit Logs", icon: ScrollText },
+    { to: "/profile", label: "My Profile", icon: Settings },
   ],
-  "it-expert": [
-    { label: "Dashboard", path: "/dashboard", icon: "🏠" },
-    { label: "User Management", path: "/admin/users", icon: "👤" },
-    { label: "Contracts", path: "/admin/contracts", icon: "📋" },
-    { label: "Documents", path: "/admin/documents", icon: "📄" },
-    { label: "Salary Advances", path: "/admin/salary-advances", icon: "💰" },
-    { label: "Public Holidays", path: "/admin/holidays", icon: "🗓️" },
-    { label: "Audit Logs", path: "/admin/audit", icon: "🔍" },
-    { label: "My Profile", path: "/profile", icon: "⚙️" },
+  [ROLES.EMPLOYER]: [
+    { to: "/employer/dashboard", label: "Dashboard", icon: LayoutDashboard },
+    { to: "/employer/employees", label: "My Employees", icon: Users },
+    { to: "/employer/leave-requests", label: "Leave Requests", icon: FileText },
+    { to: "/employer/timesheets", label: "Timesheets", icon: ScrollText },
+    { to: "/employer/documents", label: "Documents", icon: FolderClosed },
+    { to: "/my-activity", label: "My Activity", icon: ScrollText },
+    { to: "/profile", label: "My Profile", icon: Settings },
   ],
-  employer: [
-    { label: "Dashboard", path: "/dashboard", icon: "🏠" },
-    { label: "My Employees", path: "/employer/employees", icon: "👷" },
-    { label: "Leave Requests", path: "/employer/leave", icon: "📅" },
-    { label: "Timesheets", path: "/employer/timesheets", icon: "📊" },
-    { label: "Documents", path: "/employer/documents", icon: "📄" },
-    { label: "My Profile", path: "/profile", icon: "⚙️" },
+  [ROLES.EMPLOYEE]: [
+    { to: "/employee/dashboard", label: "Dashboard", icon: LayoutDashboard },
+    { to: "/employee/leave", label: "Leave Request", icon: FileText },
+    { to: "/employee/holiday", label: "Holiday Work", icon: CalendarDays },
+    { to: "/employee/overtime", label: "Overtime", icon: ScrollText },
+    { to: "/employee/documents", label: "My Documents", icon: FolderClosed },
+    { to: "/my-activity", label: "My Activity", icon: ScrollText },
+    { to: "/profile", label: "My Profile", icon: Settings },
   ],
-  employee: [
-    { label: "Dashboard", path: "/dashboard", icon: "🏠" },
-    { label: "Leave Request", path: "/employee/leave", icon: "📅" },
-    { label: "Overtime / Holiday", path: "/employee/overtime", icon: "⏱️" },
-    { label: "My Documents", path: "/employee/documents", icon: "📄" },
-    { label: "My Profile", path: "/profile", icon: "⚙️" },
-  ],
-  user: [
-    { label: "Dashboard", path: "/dashboard", icon: "🏠" },
-    { label: "My Profile", path: "/profile", icon: "⚙️" },
-  ],
-};
-
-const ROLE_LABELS = {
-  admin: { label: "Admin", color: "bg-red-100 text-red-700" },
-  "it-expert": { label: "IT Expert", color: "bg-purple-100 text-purple-700" },
-  employer: { label: "Employer", color: "bg-blue-100 text-blue-700" },
-  employee: { label: "Employee", color: "bg-green-100 text-green-700" },
-  user: { label: "User", color: "bg-gray-100 text-gray-600" },
 };
 
 export default function Layout({ children }) {
-  const { user, role, logout } = useAuth();
-  const [, navigate] = useLocation();
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const { profile, signOut } = useAuth();
+  const [location, navigate] = useLocation();
+  const [open, setOpen] = useState(false);
+
+  const links = navByRole[profile?.role] || [];
+
+  // Close mobile drawer on route change
+  useEffect(() => {
+    setOpen(false);
+  }, [location]);
 
   const handleLogout = async () => {
-    await logout();
-    navigate("/login");
+    await signOut();
+    navigate("/login", { replace: true });
   };
 
-  const navItems = NAV_BY_ROLE[role] || NAV_BY_ROLE.user;
-  const roleInfo = ROLE_LABELS[role] || ROLE_LABELS.user;
+  const initial = (profile?.fullName || profile?.email || "?")
+    .trim()
+    .charAt(0)
+    .toUpperCase();
 
-  return (
-    <div className="min-h-screen bg-[#F5F7FA] flex">
-      {sidebarOpen && (
-        <div
-          className="fixed inset-0 bg-black/40 z-20 lg:hidden"
-          onClick={() => setSidebarOpen(false)}
-        />
-      )}
+  const roleLabel = profile?.role
+    ? profile.role.charAt(0).toUpperCase() + profile.role.slice(1)
+    : "";
 
-      <aside
-        className={`fixed top-0 left-0 h-full w-64 bg-[#1B4F72] flex flex-col z-30 transition-transform duration-300 ${sidebarOpen ? "translate-x-0" : "-translate-x-full"} lg:translate-x-0 lg:static lg:flex`}
-      >
-        <div className="p-5 border-b border-white/10">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 bg-[#F39C12] rounded-lg flex items-center justify-center flex-shrink-0">
-              <span className="text-white font-bold text-sm">SH</span>
-            </div>
-            <div>
-              <p className="font-bold text-white text-sm">SafiHub HRIS</p>
-              <p className="text-blue-300 text-xs">HR Management System</p>
-            </div>
+  const SidebarContent = (
+    <div className="flex flex-col h-full">
+      {/* Brand */}
+      <div className="px-5 py-5 flex items-center gap-3 border-b border-white/10">
+        <div className="w-10 h-10 rounded-lg bg-accent flex items-center justify-center text-white font-bold shrink-0">
+          SH
+        </div>
+        <div className="min-w-0">
+          <div className="font-semibold text-white truncate">SafiHub HRIS</div>
+          <div className="text-xs text-white/60 truncate">
+            HR Management System
           </div>
         </div>
+      </div>
 
-        <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
-          {navItems.map((item) => (
-            <NavItem
-              key={item.path}
-              item={item}
-              onNavigate={() => setSidebarOpen(false)}
-            />
-          ))}
-        </nav>
+      {/* Nav */}
+      <nav className="flex-1 px-3 py-4 overflow-y-auto">
+        <ul className="space-y-1">
+          {links.map((l) => {
+            const Icon = l.icon;
+            const active = location === l.to;
+            return (
+              <li key={l.to}>
+                <Link href={l.to}>
+                  <span
+                    className={`flex items-center gap-3 px-3 py-2.5 rounded-md text-sm cursor-pointer transition ${
+                      active
+                        ? "bg-white/15 text-white font-medium"
+                        : "text-white/70 hover:bg-white/10 hover:text-white"
+                    }`}
+                  >
+                    <Icon className="w-5 h-5 shrink-0" />
+                    <span className="truncate">{l.label}</span>
+                  </span>
+                </Link>
+              </li>
+            );
+          })}
+        </ul>
+      </nav>
 
-        <div className="p-4 border-t border-white/10">
-          <div className="flex items-center gap-3 mb-3">
-            <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center text-white font-semibold text-sm">
-              {user?.email?.[0]?.toUpperCase() || "?"}
+      {/* User card + sign out */}
+      <div className="px-3 pt-3 pb-4 border-t border-white/10 mt-auto">
+        <div className="flex items-center gap-3 px-2 py-2">
+          <div className="w-9 h-9 rounded-full bg-white/15 flex items-center justify-center text-white font-semibold shrink-0">
+            {initial}
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="text-sm text-white truncate">
+              {profile?.fullName || profile?.email}
             </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-white text-xs font-medium truncate">
-                {user?.displayName || user?.email}
-              </p>
-              <span
-                className={`text-xs px-1.5 py-0.5 rounded font-medium ${roleInfo.color}`}
-              >
-                {roleInfo.label}
+            {roleLabel && (
+              <span className="inline-block mt-0.5 text-[10px] uppercase tracking-wide bg-accent/20 text-accent px-2 py-0.5 rounded">
+                {roleLabel}
               </span>
-            </div>
+            )}
           </div>
-          <button
-            onClick={handleLogout}
-            className="w-full flex items-center gap-2 px-3 py-2 text-blue-200 hover:bg-white/10 rounded-lg text-sm transition-colors"
-          >
-            <svg
-              className="w-4 h-4"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"
-              />
-            </svg>
-            Sign out
-          </button>
         </div>
-      </aside>
-
-      <div className="flex-1 flex flex-col min-w-0">
-        <header className="bg-white border-b border-gray-200 px-4 py-3 flex items-center gap-4 lg:hidden">
-          <button
-            onClick={() => setSidebarOpen(true)}
-            className="text-[#1B4F72]"
-          >
-            <svg
-              className="w-6 h-6"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M4 6h16M4 12h16M4 18h16"
-              />
-            </svg>
-          </button>
-          <span className="font-bold text-[#1B4F72]">SafiHub HRIS</span>
-        </header>
-        <main className="flex-1 overflow-auto">{children}</main>
+        <button
+          onClick={handleLogout}
+          className="mt-2 w-full flex items-center gap-3 px-3 py-2.5 rounded-md text-sm text-white/80 hover:bg-white/10 hover:text-white transition"
+        >
+          <LogOut className="w-5 h-5" />
+          Sign out
+        </button>
       </div>
     </div>
   );
-}
-
-function NavItem({ item, onNavigate }) {
-  const [location, navigate] = useLocation();
-  const isActive =
-    location === item.path || location.startsWith(item.path + "/");
 
   return (
-    <button
-      onClick={() => {
-        navigate(item.path);
-        onNavigate();
-      }}
-      className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors text-left ${isActive ? "bg-white/20 text-white" : "text-blue-200 hover:bg-white/10 hover:text-white"}`}
-    >
-      <span className="text-base">{item.icon}</span>
-      {item.label}
-    </button>
+    <div className="min-h-screen bg-background">
+      {/* Desktop sidebar */}
+      <aside className="hidden lg:flex fixed inset-y-0 left-0 w-64 bg-primary text-primary-foreground flex-col z-30">
+        {SidebarContent}
+      </aside>
+
+      {/* Mobile top bar */}
+      <header className="lg:hidden sticky top-0 z-20 bg-primary text-primary-foreground shadow">
+        <div className="flex items-center justify-between px-4 py-3">
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="w-8 h-8 rounded-md bg-accent flex items-center justify-center text-white font-bold text-sm shrink-0">
+              SH
+            </div>
+            <span className="font-semibold truncate">SafiHub HRIS</span>
+          </div>
+          <button
+            onClick={() => setOpen(true)}
+            className="p-2 -mr-2 rounded hover:bg-white/10"
+            aria-label="Open menu"
+          >
+            <Menu className="w-6 h-6" />
+          </button>
+        </div>
+      </header>
+
+      {/* Mobile drawer */}
+      {open && (
+        <div className="lg:hidden fixed inset-0 z-40">
+          <div
+            className="absolute inset-0 bg-black/50"
+            onClick={() => setOpen(false)}
+            aria-hidden
+          />
+          <aside className="absolute inset-y-0 left-0 w-72 max-w-[85%] bg-primary text-primary-foreground flex flex-col shadow-xl">
+            <button
+              onClick={() => setOpen(false)}
+              className="absolute top-3 right-3 p-2 rounded hover:bg-white/10 z-10"
+              aria-label="Close menu"
+            >
+              <X className="w-5 h-5" />
+            </button>
+            {SidebarContent}
+          </aside>
+        </div>
+      )}
+
+      {/* Main content */}
+      <main className="lg:pl-64">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
+          {children}
+        </div>
+      </main>
+    </div>
   );
 }

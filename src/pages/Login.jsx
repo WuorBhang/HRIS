@@ -1,217 +1,267 @@
 import { useState } from "react";
 import { useLocation } from "wouter";
+import { sendPasswordResetEmail } from "firebase/auth";
+import { Users, Lock, FileText, ShieldCheck } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
+import { auth } from "../lib/firebase";
 
 export default function Login() {
-  const { login, resetPassword } = useAuth();
+  const { signIn } = useAuth();
   const [, navigate] = useLocation();
+
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [info, setInfo] = useState("");
+  const [pending, setPending] = useState(false);
   const [loading, setLoading] = useState(false);
   const [showReset, setShowReset] = useState(false);
-  const [resetEmail, setResetEmail] = useState("");
-  const [resetSent, setResetSent] = useState(false);
 
-  async function handleSubmit(e) {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     setError("");
+    setInfo("");
+    setPending(false);
     setLoading(true);
     try {
-      await login(email, password);
-      navigate("/dashboard");
+      await signIn(email, password);
+      navigate("/dashboard", { replace: true });
     } catch (err) {
-      const msg = [
-        "auth/invalid-credential",
-        "auth/wrong-password",
-        "auth/user-not-found",
-      ].includes(err.code)
-        ? "Invalid email or password."
-        : err.message;
-      setError(msg);
+      if (err.code === "pending_approval") {
+        setPending(true);
+      } else if (
+        err.code === "auth/invalid-credential" ||
+        err.code === "auth/wrong-password" ||
+        err.code === "auth/user-not-found"
+      ) {
+        setError("Invalid email or password.");
+      } else {
+        setError(err.message || "Sign in failed.");
+      }
     } finally {
       setLoading(false);
     }
-  }
+  };
 
-  async function handleReset(e) {
-    e.preventDefault();
-    setLoading(true);
+  const handleReset = async () => {
     setError("");
-    try {
-      await resetPassword(resetEmail);
-      setResetSent(true);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
+    setInfo("");
+    if (!email.trim()) {
+      setError(
+        "Enter your email above first, then click Forgot your password?",
+      );
+      return;
     }
-  }
+    setShowReset(true);
+    try {
+      await sendPasswordResetEmail(auth, email.trim());
+      setInfo(`Password reset link sent to ${email.trim()}. Check your inbox.`);
+      // Note: we can't audit unauthenticated reset requests because
+      // Firestore rules require performedBy == auth.uid for activity_logs.
+    } catch (err) {
+      if (err.code === "auth/user-not-found") {
+        setError("No account exists for that email.");
+      } else if (err.code === "auth/invalid-email") {
+        setError("Please enter a valid email.");
+      } else {
+        setError(err.message || "Could not send reset email.");
+      }
+    } finally {
+      setShowReset(false);
+    }
+  };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-[#1B4F72] to-[#154360] flex items-center justify-center p-4">
-      <div className="w-full max-w-4xl grid grid-cols-1 lg:grid-cols-2 gap-8 items-center">
-        {/* Left — branding */}
-        <div className="text-white hidden lg:block">
-          <div className="flex items-center gap-3 mb-8">
-            <div className="w-12 h-12 bg-[#F39C12] rounded-xl flex items-center justify-center font-bold text-white text-lg">
-              SH
+    <div className="min-h-screen bg-primary text-primary-foreground flex items-center px-4 sm:px-6 lg:px-16 py-6 sm:py-10">
+      {/* Mobile-only: SafiHub logo + login card */}
+      <div className="lg:hidden w-full max-w-md mx-auto">
+        <div className="flex items-center gap-3 mb-6 justify-center">
+          <div className="bg-accent w-11 h-11 rounded-lg flex items-center justify-center shrink-0">
+            <Users className="w-6 h-6 text-accent-foreground" />
+          </div>
+          <div className="text-xl font-bold leading-tight">SafiHub HRIS</div>
+        </div>
+        <div className="bg-card text-card-foreground rounded-lg shadow-xl p-6">
+          <LoginCardContent
+            email={email}
+            setEmail={setEmail}
+            password={password}
+            setPassword={setPassword}
+            error={error}
+            info={info}
+            pending={pending}
+            loading={loading}
+            showReset={showReset}
+            handleSubmit={handleSubmit}
+            handleReset={handleReset}
+          />
+        </div>
+      </div>
+
+      {/* Desktop / large-tablet: full split layout with marketing copy */}
+      <div className="hidden lg:grid w-full max-w-6xl mx-auto lg:grid-cols-2 gap-12 items-center">
+        {/* Left: brand + marketing */}
+        <div>
+          <div className="flex items-center gap-3 mb-10">
+            <div className="bg-accent w-12 h-12 rounded-lg flex items-center justify-center shrink-0">
+              <Users className="w-6 h-6 text-accent-foreground" />
             </div>
             <div>
-              <p className="font-bold text-xl">SafiHub HRIS</p>
-              <p className="text-blue-300 text-sm">
+              <div className="text-xl font-bold leading-tight">
+                HRIS Platform
+              </div>
+              <div className="text-sm text-white/70">
                 Human Resource Information System
-              </p>
+              </div>
             </div>
           </div>
-          <h1 className="text-4xl font-bold mb-4 leading-tight">
+
+          <h1 className="text-4xl font-bold leading-tight mb-4">
             Manage your workforce
             <br />
-            <span className="text-[#F39C12]">with confidence.</span>
+            with confidence
           </h1>
-          <p className="text-blue-200 mb-8">
-            A secure, role-based HR platform for managing domestic workers —
-            leave, overtime, timesheets, and documents.
+          <p className="text-white/80 mb-8 max-w-md">
+            A secure, role-based HR platform for employers to manage employee
+            records, documents, and access controls.
           </p>
-          <div className="space-y-3 text-sm">
-            {[
-              ["🔒", "Role-based access: Admin, Employer, Employee"],
-              ["📋", "Contract & leave management"],
-              ["📊", "Monthly timesheet approvals with locking"],
-              ["📄", "Secure PDF document storage"],
-              ["🔍", "Full audit trail logging"],
-            ].map(([icon, text]) => (
-              <div key={text} className="flex items-center gap-3 text-blue-100">
-                <span>{icon}</span>
-                <span>{text}</span>
-              </div>
-            ))}
-          </div>
+
+          <ul className="space-y-3 max-w-md">
+            <Feature
+              icon={<Lock className="w-4 h-4 text-accent" />}
+              text="Role-based access control (Admin, Employer, Employee)"
+            />
+            <Feature
+              icon={<ShieldCheck className="w-4 h-4 text-accent" />}
+              text="Full employee lifecycle management"
+            />
+            <Feature
+              icon={<FileText className="w-4 h-4 text-accent" />}
+              text="Secure document storage & retrieval"
+            />
+          </ul>
         </div>
 
-        {/* Right — login form */}
-        <div className="bg-white rounded-2xl shadow-2xl p-8">
-          <div className="flex items-center gap-2 mb-6 lg:hidden">
-            <div className="w-8 h-8 bg-[#F39C12] rounded-lg flex items-center justify-center font-bold text-white text-sm">
-              SH
-            </div>
-            <span className="font-bold text-[#1B4F72]">SafiHub HRIS</span>
-          </div>
-
-          <h2 className="text-2xl font-bold text-gray-900 mb-1">
-            Welcome back
-          </h2>
-          <p className="text-gray-500 text-sm mb-6">
-            Sign in to your account to continue
-          </p>
-
-          {!showReset ? (
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Email address
-                </label>
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  required
-                  className="input-field"
-                  placeholder="you@example.com"
-                  autoComplete="email"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Password
-                </label>
-                <input
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                  className="input-field"
-                  placeholder="••••••••"
-                  autoComplete="current-password"
-                />
-              </div>
-              {error && (
-                <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-red-700 text-sm">
-                  {error}
-                </div>
-              )}
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full bg-[#1B4F72] hover:bg-[#154360] text-white py-3 rounded-xl font-semibold text-sm disabled:opacity-60 flex items-center justify-center gap-2 transition-colors"
-              >
-                {loading ? (
-                  <>
-                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                    Signing in...
-                  </>
-                ) : (
-                  "Sign in"
-                )}
-              </button>
-              <div className="text-center">
-                <button
-                  type="button"
-                  onClick={() => setShowReset(true)}
-                  className="text-[#1B4F72] text-sm hover:underline"
-                >
-                  Forgot your password?
-                </button>
-              </div>
-            </form>
-          ) : (
-            <form onSubmit={handleReset} className="space-y-4">
-              <p className="text-sm text-gray-600">
-                Enter your email and we'll send a password reset link.
-              </p>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Email address
-                </label>
-                <input
-                  type="email"
-                  value={resetEmail}
-                  onChange={(e) => setResetEmail(e.target.value)}
-                  required
-                  className="input-field"
-                  placeholder="you@example.com"
-                />
-              </div>
-              {resetSent && (
-                <div className="bg-green-50 border border-green-200 rounded-lg p-3 text-green-700 text-sm">
-                  ✓ Reset link sent! Check your inbox.
-                </div>
-              )}
-              {error && (
-                <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-red-700 text-sm">
-                  {error}
-                </div>
-              )}
-              <button
-                type="submit"
-                disabled={loading || resetSent}
-                className="w-full bg-[#1B4F72] hover:bg-[#154360] text-white py-3 rounded-xl font-semibold text-sm disabled:opacity-60"
-              >
-                Send Reset Link
-              </button>
-              <div className="text-center">
-                <button
-                  type="button"
-                  onClick={() => setShowReset(false)}
-                  className="text-gray-500 text-sm hover:underline"
-                >
-                  Back to login
-                </button>
-              </div>
-            </form>
-          )}
+        {/* Right: sign-in card */}
+        <div className="bg-card text-card-foreground rounded-lg shadow-xl p-8">
+          <LoginCardContent
+            email={email}
+            setEmail={setEmail}
+            password={password}
+            setPassword={setPassword}
+            error={error}
+            info={info}
+            pending={pending}
+            loading={loading}
+            showReset={showReset}
+            handleSubmit={handleSubmit}
+            handleReset={handleReset}
+          />
         </div>
       </div>
     </div>
+  );
+}
+
+function LoginCardContent({
+  email,
+  setEmail,
+  password,
+  setPassword,
+  error,
+  info,
+  pending,
+  loading,
+  showReset,
+  handleSubmit,
+  handleReset,
+}) {
+  return (
+    <>
+      <h2 className="text-2xl font-bold text-primary mb-1">Welcome back</h2>
+      <p className="text-sm text-muted-foreground mb-6">
+        Sign in to your account to continue
+      </p>
+
+      {pending && (
+        <div className="mb-4 p-3 rounded-md border border-accent/40 bg-accent/10 text-sm">
+          <p className="font-semibold text-accent">Awaiting admin approval</p>
+          <p className="text-foreground/80 mt-1">
+            Your account has been created but is not yet approved. Please wait
+            for the admin to approve it before signing in.
+          </p>
+        </div>
+      )}
+
+      {error && (
+        <div className="mb-4 p-3 rounded-md border border-destructive/40 bg-destructive/10 text-sm text-destructive">
+          {error}
+        </div>
+      )}
+
+      {info && (
+        <div className="mb-4 p-3 rounded-md border border-green-300 bg-green-50 text-sm text-green-700">
+          {info}
+        </div>
+      )}
+
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div>
+          <label className="block text-sm font-medium mb-1">
+            Email address
+          </label>
+          <input
+            type="email"
+            required
+            autoComplete="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            className="w-full px-3 py-2 rounded-md border border-border bg-card focus:ring-2 focus:ring-primary focus:border-transparent outline-none"
+            placeholder="you@company.com"
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-medium mb-1">Password</label>
+          <input
+            type="password"
+            required
+            autoComplete="current-password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            className="w-full px-3 py-2 rounded-md border border-border bg-card focus:ring-2 focus:ring-primary focus:border-transparent outline-none"
+            placeholder="••••••••"
+          />
+        </div>
+        <button
+          type="submit"
+          disabled={loading}
+          className="w-full bg-primary text-primary-foreground py-2.5 rounded-md font-medium hover:opacity-90 transition disabled:opacity-50"
+        >
+          {loading ? "Signing in…" : "Sign in"}
+        </button>
+      </form>
+
+      <div className="text-center mt-4">
+        <button
+          type="button"
+          onClick={handleReset}
+          disabled={showReset}
+          className="text-sm text-primary hover:underline disabled:opacity-50"
+        >
+          {showReset ? "Sending…" : "Forgot your password?"}
+        </button>
+      </div>
+    </>
+  );
+}
+
+function Feature({ icon, text }) {
+  return (
+    <li className="flex items-start gap-3">
+      <span className="mt-1 w-7 h-7 rounded-md bg-white/10 flex items-center justify-center shrink-0">
+        {icon}
+      </span>
+      <span className="text-sm text-white/90">{text}</span>
+    </li>
   );
 }

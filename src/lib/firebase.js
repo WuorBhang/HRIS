@@ -1,8 +1,6 @@
-import { initializeApp } from "firebase/app";
+import { initializeApp, getApps, getApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
-import { getStorage } from "firebase/storage";
-import { getAnalytics } from "firebase/analytics";
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -13,19 +11,22 @@ const firebaseConfig = {
   appId: import.meta.env.VITE_FIREBASE_APP_ID,
 };
 
-// Safety check for Vite
-const required = Object.keys(firebaseConfig);
-for (const key of required) {
-  if (!firebaseConfig[key]) {
-    throw new Error(`Missing Firebase env var: VITE_FIREBASE_${key.replace(/[A-Z]/g, letter => `_${letter}`).toUpperCase()}`);
-  }
+for (const [k, v] of Object.entries(firebaseConfig)) {
+  if (!v) throw new Error(`Missing Firebase env var for ${k}`);
 }
 
-const app = initializeApp(firebaseConfig);
+const app = getApps().find((a) => a.name === "[DEFAULT]") || initializeApp(firebaseConfig);
 
 export const auth = getAuth(app);
 export const db = getFirestore(app);
-export const storage = getStorage(app);
-export const analytics = typeof window !== 'undefined' ? getAnalytics(app) : null;
+
+export function getSecondaryAuth() {
+  const name = "Secondary";
+  const secondary =
+    getApps().find((a) => a.name === name) || initializeApp(firebaseConfig, name);
+  return getAuth(secondary);
+}
+
+export const ADMIN_EMAIL = (import.meta.env.VITE_ADMIN_EMAIL || "").toLowerCase().trim();
 
 export default app;

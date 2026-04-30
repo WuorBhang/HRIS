@@ -1,676 +1,694 @@
-import { useState, useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { Link } from "wouter";
 import {
   collection,
-  query,
-  where,
-  getDocs,
-  updateDoc,
   doc,
+  getDocs,
+  query,
   serverTimestamp,
+  updateDoc,
+  where,
 } from "firebase/firestore";
 import {
-  updateProfile,
-  updateEmail,
-  reauthenticateWithCredential,
   EmailAuthProvider,
+  reauthenticateWithCredential,
+  verifyBeforeUpdateEmail,
+  updateProfile,
 } from "firebase/auth";
-import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
-import { db, auth, storage } from "../lib/firebase";
-import { useAuth } from "../context/AuthContext";
-import Layout from "../components/Layout";
+import { Camera, Loader2, Save, KeyRound, Mail, Pencil, X } from "lucide-react";
 
-function ProgressBar({ value }) {
-  return (
-    <div className="w-full bg-gray-200 rounded-full h-1.5 mt-1">
-      <div
-        className="bg-[#1B4F72] h-1.5 rounded-full transition-all duration-300"
-        style={{ width: `${value}%` }}
-      />
-    </div>
+import Layout from "../components/Layout";
+import Avatar from "../components/Avatar";
+import { auth, db } from "../lib/firebase";
+import { supabase, SUPABASE_BUCKETS } from "../lib/supabase";
+import { useAuth } from "../context/AuthContext";
+import { COLLECTIONS, ROLES } from "../lib/constants";
+import { AUDIT_ACTIONS, logAction } from "../lib/audit";
+
+const MAX_AVATAR_DIM = 480;
+const MAX_AVATAR_BYTES = 5 * 1024 * 1024;
+
+// Resize the chosen image down to MAX_AVATAR_DIM (longest side) and re-encode
+// as JPEG so uploads stay small and fast even from phone cameras.
+async function compressImage(file) {
+  const previewUrl = URL.createObjectURL(file);
+  const img = await new Promise((resolve, reject) => {
+    const i = new Image();
+    i.onload = () => resolve(i);
+    i.onerror = () => reject(new Error("Could not read the image."));
+    i.src = previewUrl;
+  });
+  const ratio = Math.min(1, MAX_AVATAR_DIM / Math.max(img.width, img.height));
+  const w = Math.round(img.width * ratio);
+  const h = Math.round(img.height * ratio);
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Canvas not supported in this browser.");
+  ctx.drawImage(img, 0, 0, w, h);
+  const blob = await new Promise((resolve) =>
+    canvas.toBlob(resolve, "image/jpeg", 0.85),
   );
+  if (!blob) throw new Error("Could not encode image.");
+  return { blob, previewUrl };
 }
 
+const ROLE_LABEL = {
+  employer: "Employer",
+  employee: "Employee",
+};
+
 export default function Profile() {
-  const { user, role } = useAuth();
-  const avatarRef = useRef(null);
-  const cvRef = useRef(null);
+  const { user, profile, refreshProfile } = useAuth();
 
-  const [profileDocId, setProfileDocId] = useState(null);
   const [form, setForm] = useState({
-    displayName: "",
-    email: "",
+    fullName: "",
     phone: "",
-    whatsapp: "",
-    dateOfBirth: "",
     address: "",
-    kraPin: "",
+    bio: "",
+    dateOfBirth: "",
+    nationalId: "",
+    emergencyName: "",
+    emergencyRelationship: "",
+    emergencyPhone: "",
   });
-  const [avatarUrl, setAvatarUrl] = useState(null);
-  const [cvUrl, setCvUrl] = useState(null);
-  const [cvName, setCvName] = useState(null);
+  const [photoURL, setPhotoURL] = useState("");
+  // Local blob URL shown during upload so the new picture appears instantly,
+  // before the Firebase Storage URL has resolved.
+  const [optimisticPhoto, setOptimisticPhoto] = useState(null);
 
-  const [avatarProgress, setAvatarProgress] = useState(0);
-  const [cvProgress, setCvProgress] = useState(0);
-  const [uploading, setUploading] = useState({ avatar: false, cv: false });
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
-  const [loading, setLoading] = useState(true);
+  const [uploading, setUploading] = useState(false);
+  const [savedMsg, setSavedMsg] = useState("");
+  const [savedErr, setSavedErr] = useState("");
+  const fileInput = useRef(null);
 
-  // Re-auth modal state
-  const [showReauth, setShowReauth] = useState(false);
-  const [reauthPassword, setReauthPassword] = useState("");
-  const [reauthError, setReauthError] = useState("");
-  const [pendingEmailChange, setPendingEmailChange] = useState(null);
+  // Employee-only contracts list.
+  const [contracts, setContracts] = useState([]);
+  const [contractsLoading, setContractsLoading] = useState(false);
 
+  // Email-change modal state.
+  const [emailDialogOpen, setEmailDialogOpen] = useState(false);
+  const [emailForm, setEmailForm] = useState({
+    newEmail: "",
+    currentPassword: "",
+  });
+  const [emailMsg, setEmailMsg] = useState("");
+  const [emailErr, setEmailErr] = useState("");
+  const [changingEmail, setChangingEmail] = useState(false);
+
+  // Hydrate the form whenever the profile doc changes.
   useEffect(() => {
-    if (user) loadProfile();
-  }, [user]);
-
-  async function loadProfile() {
-    setLoading(true);
-    try {
-      const q = query(
-        collection(db, "userProfiles"),
-        where("uid", "==", user.uid),
-      );
-      const snap = await getDocs(q);
-      if (!snap.empty) {
-        const data = snap.docs[0].data();
-        setProfileDocId(snap.docs[0].id);
-        setForm({
-          displayName: data.displayName || user.displayName || "",
-          email: data.email || user.email || "",
-          phone: data.phone || "",
-          whatsapp: data.whatsapp || "",
-          dateOfBirth: data.dateOfBirth || "",
-          address: data.address || "",
-          kraPin: data.kraPin || "",
-        });
-        setAvatarUrl(data.avatarUrl || user.photoURL || null);
-        setCvUrl(data.cvUrl || null);
-        setCvName(data.cvName || null);
-      } else {
-        // admin or user not in userProfiles yet
-        setForm({
-          displayName: user.displayName || "",
-          email: user.email || "",
-          phone: "",
-          whatsapp: "",
-          dateOfBirth: "",
-          address: "",
-          kraPin: "",
-        });
-        setAvatarUrl(user.photoURL || null);
-      }
-    } catch (e) {
-      setError("Failed to load profile: " + e.message);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  // Compress & resize image before upload (makes uploads 5-10× faster)
-  async function compressImage(file, maxDim = 800, quality = 0.85) {
-    return new Promise((resolve) => {
-      const img = new Image();
-      const url = URL.createObjectURL(file);
-      img.onload = () => {
-        URL.revokeObjectURL(url);
-        let { width, height } = img;
-        if (width <= maxDim && height <= maxDim) {
-          resolve(file);
-          return;
-        }
-        if (width > height) {
-          height = Math.round((height * maxDim) / width);
-          width = maxDim;
-        } else {
-          width = Math.round((width * maxDim) / height);
-          height = maxDim;
-        }
-        const canvas = document.createElement("canvas");
-        canvas.width = width;
-        canvas.height = height;
-        canvas.getContext("2d").drawImage(img, 0, 0, width, height);
-        canvas.toBlob(
-          (blob) =>
-            resolve(
-              new File([blob], file.name.replace(/\.[^.]+$/, ".jpg"), {
-                type: "image/jpeg",
-              }),
-            ),
-          "image/jpeg",
-          quality,
-        );
-      };
-      img.src = url;
+    if (!profile) return;
+    setForm({
+      fullName: profile.fullName ?? "",
+      phone: profile.phone ?? "",
+      address: profile.address ?? "",
+      bio: profile.bio ?? "",
+      dateOfBirth: profile.dateOfBirth ?? "",
+      nationalId: profile.nationalId ?? "",
+      emergencyName: profile.emergencyContact?.name ?? "",
+      emergencyRelationship: profile.emergencyContact?.relationship ?? "",
+      emergencyPhone: profile.emergencyContact?.phone ?? "",
     });
-  }
+    setPhotoURL(profile.photoURL ?? "");
+  }, [profile]);
 
-  function uploadFile(file, storagePath, onProgress, onDone, onError) {
-    const storageRef = ref(storage, storagePath);
-    const task = uploadBytesResumable(storageRef, file);
-    task.on(
-      "state_changed",
-      (snap) =>
-        onProgress(Math.round((snap.bytesTransferred / snap.totalBytes) * 100)),
-      (err) => onError(err),
-      async () => {
-        const url = await getDownloadURL(task.snapshot.ref);
-        onDone(url);
-      },
-    );
-  }
+  // Free the temporary blob URL once we no longer need it.
+  useEffect(() => {
+    return () => {
+      if (optimisticPhoto) URL.revokeObjectURL(optimisticPhoto);
+    };
+  }, [optimisticPhoto]);
 
-  async function handleAvatarChange(e) {
-    const file = e.target.files[0];
-    if (!file) return;
+  // Load the employee's contracts (denormalized employer info already on the doc).
+  useEffect(() => {
+    if (!profile || profile.role !== ROLES.EMPLOYEE) return;
+    let cancelled = false;
+    setContractsLoading(true);
+    (async () => {
+      try {
+        const q = query(
+          collection(db, COLLECTIONS.CONTRACTS),
+          where("employeeId", "==", profile.id),
+        );
+        const snap = await getDocs(q);
+        if (cancelled) return;
+        setContracts(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+      } catch {
+        if (!cancelled) setContracts([]);
+      } finally {
+        if (!cancelled) setContractsLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [profile]);
+
+  const handlePickFile = () => fileInput.current?.click();
+
+  const handleUpload = async (file) => {
+    if (!user || !profile) return;
+    setSavedMsg("");
+    setSavedErr("");
     if (!file.type.startsWith("image/")) {
-      setError("Please select an image file.");
+      setSavedErr("Please choose an image file.");
       return;
     }
-    if (file.size > 10 * 1024 * 1024) {
-      setError("Image must be under 10 MB.");
+    if (file.size > MAX_AVATAR_BYTES) {
+      setSavedErr("Image is too large. Maximum size is 5 MB.");
       return;
     }
-    setUploading((p) => ({ ...p, avatar: true }));
-    setAvatarProgress(0);
-    setError("");
+    setUploading(true);
     try {
-      const compressed = await compressImage(file);
-      uploadFile(
-        compressed,
-        `avatars/${user.uid}/profile.jpg`,
-        setAvatarProgress,
-        async (url) => {
-          setAvatarUrl(url);
-          setAvatarProgress(100);
-          setUploading((p) => ({ ...p, avatar: false }));
-          await updateProfile(auth.currentUser, { photoURL: url });
-          if (profileDocId)
-            await updateDoc(doc(db, "userProfiles", profileDocId), {
-              avatarUrl: url,
-              updatedAt: serverTimestamp(),
-            });
-          setSuccess("Profile photo updated.");
-        },
-        (err) => {
-          setError("Upload failed: " + err.message);
-          setUploading((p) => ({ ...p, avatar: false }));
-        },
-      );
-    } catch (err) {
-      setError("Failed to process image: " + err.message);
-      setUploading((p) => ({ ...p, avatar: false }));
-    }
-  }
-
-  async function handleCvChange(e) {
-    const file = e.target.files[0];
-    if (!file) return;
-    if (file.type !== "application/pdf") {
-      setError("CV must be a PDF file.");
-      return;
-    }
-    if (file.size > 10 * 1024 * 1024) {
-      setError("CV must be under 10 MB.");
-      return;
-    }
-    setUploading((p) => ({ ...p, cv: true }));
-    setError("");
-    uploadFile(
-      file,
-      `cvs/${user.uid}/cv.pdf`,
-      setCvProgress,
-      async (url) => {
-        setCvUrl(url);
-        setCvName(file.name);
-        setCvProgress(100);
-        setUploading((p) => ({ ...p, cv: false }));
-        if (profileDocId)
-          await updateDoc(doc(db, "userProfiles", profileDocId), {
-            cvUrl: url,
-            cvName: file.name,
-            updatedAt: serverTimestamp(),
-          });
-        setSuccess("CV uploaded successfully.");
-      },
-      (err) => {
-        setError("CV upload failed: " + err.message);
-        setUploading((p) => ({ ...p, cv: false }));
-      },
-    );
-  }
-
-  async function handleSave(e) {
-    e.preventDefault();
-    setSaving(true);
-    setError("");
-    setSuccess("");
-    try {
-      // Update display name in Firebase Auth
-      if (form.displayName !== user.displayName) {
-        await updateProfile(auth.currentUser, {
-          displayName: form.displayName,
-        });
+      const { blob, previewUrl } = await compressImage(file);
+      setOptimisticPhoto(previewUrl);
+      const path = `${user.uid}/avatar.jpg`;
+      const { error: upErr } = await supabase.storage
+        .from(SUPABASE_BUCKETS.AVATARS)
+        .upload(path, blob, { contentType: "image/jpeg", upsert: true });
+      if (upErr) {
+        throw new Error(
+          upErr.message?.includes("row-level security")
+            ? "Supabase blocked the upload. Make sure the 'avatars' bucket exists and allows uploads (see SUPABASE_SETUP.md)."
+            : upErr.message || "Photo upload failed.",
+        );
       }
-
-      // Email change needs re-authentication
-      if (form.email !== user.email) {
-        setPendingEmailChange(form.email);
-        setShowReauth(true);
-        setSaving(false);
-        return;
+      const { data: pub } = supabase.storage
+        .from(SUPABASE_BUCKETS.AVATARS)
+        .getPublicUrl(path);
+      // Cache-bust so the new picture replaces the old one in <img> tags
+      // even though the path is identical.
+      const url = `${pub.publicUrl}?v=${Date.now()}`;
+      await updateDoc(doc(db, COLLECTIONS.USERS, user.uid), {
+        photoURL: url,
+        updatedAt: serverTimestamp(),
+      });
+      // Mirror onto Firebase Auth profile so other surfaces (e.g. email links)
+      // can use the same picture.
+      try {
+        await updateProfile(auth.currentUser, { photoURL: url });
+      } catch {
+        /* non-fatal */
       }
-
-      await persistProfile();
+      setPhotoURL(url);
+      setOptimisticPhoto(null);
+      await refreshProfile();
+      setSavedMsg("Profile photo updated.");
     } catch (e) {
-      setError(e.message);
+      setOptimisticPhoto(null);
+      setSavedErr(e.message || "Photo upload failed.");
+    } finally {
+      setUploading(false);
+      if (fileInput.current) fileInput.current.value = "";
+    }
+  };
+
+  const handleSave = async () => {
+    if (!user) return;
+    setSavedMsg("");
+    setSavedErr("");
+    if (!form.fullName.trim()) {
+      setSavedErr("Full name is required.");
+      return;
+    }
+    setSaving(true);
+    try {
+      await updateDoc(doc(db, COLLECTIONS.USERS, user.uid), {
+        fullName: form.fullName.trim(),
+        phone: form.phone.trim(),
+        address: form.address.trim(),
+        bio: form.bio.trim(),
+        dateOfBirth: form.dateOfBirth || "",
+        nationalId: form.nationalId.trim(),
+        emergencyContact: {
+          name: form.emergencyName.trim(),
+          relationship: form.emergencyRelationship.trim(),
+          phone: form.emergencyPhone.trim(),
+        },
+        updatedAt: serverTimestamp(),
+      });
+      // Keep Firebase Auth's displayName in sync with the saved full name.
+      if (form.fullName.trim() !== auth.currentUser?.displayName) {
+        try {
+          await updateProfile(auth.currentUser, {
+            displayName: form.fullName.trim(),
+          });
+        } catch {
+          /* non-fatal */
+        }
+      }
+      await refreshProfile();
+      logAction(AUDIT_ACTIONS.PROFILE_UPDATED, user.uid, profile?.role, {
+        fields: [
+          "fullName",
+          "phone",
+          "address",
+          "bio",
+          "dateOfBirth",
+          "nationalId",
+          "emergencyContact",
+        ],
+      });
+      setSavedMsg("Profile saved.");
+    } catch (e) {
+      setSavedErr(e.message || "Could not save profile.");
     } finally {
       setSaving(false);
     }
-  }
+  };
 
-  async function persistProfile() {
-    const profileData = {
-      displayName: form.displayName,
-      email: form.email,
-      phone: form.phone,
-      whatsapp: form.whatsapp,
-      dateOfBirth: form.dateOfBirth,
-      address: form.address,
-      kraPin: form.kraPin,
-      updatedAt: serverTimestamp(),
-    };
-    if (profileDocId) {
-      await updateDoc(doc(db, "userProfiles", profileDocId), profileData);
+  const openEmailDialog = () => {
+    setEmailForm({ newEmail: profile?.email || "", currentPassword: "" });
+    setEmailMsg("");
+    setEmailErr("");
+    setEmailDialogOpen(true);
+  };
+
+  const handleChangeEmail = async () => {
+    const fbUser = auth.currentUser;
+    if (!fbUser || !profile || !fbUser.email) return;
+    setEmailMsg("");
+    setEmailErr("");
+    const newEmail = emailForm.newEmail.trim().toLowerCase();
+    if (!newEmail || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(newEmail)) {
+      setEmailErr("Enter a valid email address.");
+      return;
     }
-    setSuccess("Profile saved successfully.");
-    setSaving(false);
-  }
-
-  async function handleReauth(e) {
-    e.preventDefault();
-    setReauthError("");
+    if (!emailForm.currentPassword) {
+      setEmailErr("Current password is required.");
+      return;
+    }
+    if (newEmail === fbUser.email.toLowerCase()) {
+      setEmailErr("That is already your current email.");
+      return;
+    }
+    setChangingEmail(true);
     try {
-      const credential = EmailAuthProvider.credential(
-        user.email,
-        reauthPassword,
+      const cred = EmailAuthProvider.credential(
+        fbUser.email,
+        emailForm.currentPassword,
       );
-      await reauthenticateWithCredential(auth.currentUser, credential);
-      await updateEmail(auth.currentUser, pendingEmailChange);
-      setShowReauth(false);
-      setReauthPassword("");
-      setPendingEmailChange(null);
-      await persistProfile();
-    } catch (err) {
-      setReauthError(
-        err.code === "auth/wrong-password"
-          ? "Incorrect password."
-          : err.message,
+      await reauthenticateWithCredential(fbUser, cred);
+      // Modern Firebase requires email verification before the change takes
+      // effect — a confirmation link is sent to the new address.
+      await verifyBeforeUpdateEmail(fbUser, newEmail);
+      setEmailMsg(
+        `Verification link sent to ${newEmail}. Open it to finish updating your email — your sign-in email will only change after you confirm.`,
       );
+      setEmailForm({ newEmail: "", currentPassword: "" });
+    } catch (e) {
+      const code = e.code ?? "";
+      setEmailErr(
+        code === "auth/wrong-password" || code === "auth/invalid-credential"
+          ? "Current password is incorrect."
+          : code === "auth/email-already-in-use"
+            ? "That email is already used by another account."
+            : code === "auth/operation-not-allowed"
+              ? "Email change is not permitted — please contact your admin."
+              : e.message || "Failed to update email.",
+      );
+    } finally {
+      setChangingEmail(false);
     }
-  }
+  };
 
-  if (loading) {
+  if (!profile) {
     return (
       <Layout>
-        <div className="flex justify-center items-center h-64">
-          <div className="w-8 h-8 border-4 border-[#1B4F72] border-t-transparent rounded-full animate-spin" />
-        </div>
+        <div className="text-muted-foreground">Loading profile…</div>
       </Layout>
     );
   }
 
-  const initials = (form.displayName || form.email || "?")
-    .charAt(0)
-    .toUpperCase();
+  const displayedPhoto = optimisticPhoto ?? photoURL;
+  const isEmployee = profile.role === ROLES.EMPLOYEE;
 
   return (
     <Layout>
-      <div className="p-6 max-w-3xl mx-auto">
+      <div className="max-w-4xl">
         <div className="mb-6">
-          <h1 className="text-2xl font-bold text-[#1B4F72]">My Profile</h1>
-          <p className="text-gray-500 text-sm mt-0.5">
-            Manage your personal information and documents
+          <h1 className="text-xl sm:text-2xl font-bold text-primary">
+            My Profile
+          </h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            Update your personal details and profile picture.
           </p>
         </div>
 
-        {error && (
-          <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-red-700 text-sm mb-4">
-            {error}
+        {savedMsg && (
+          <div className="mb-4 p-3 rounded-md border border-green-300 bg-green-50 text-green-700 text-sm">
+            {savedMsg}
           </div>
         )}
-        {success && (
-          <div className="bg-green-50 border border-green-200 rounded-lg p-3 text-green-700 text-sm mb-4">
-            ✓ {success}
+        {savedErr && (
+          <div className="mb-4 p-3 rounded-md border border-destructive/40 bg-destructive/10 text-destructive text-sm">
+            {savedErr}
           </div>
         )}
 
-        <form onSubmit={handleSave} className="space-y-6">
-          {/* Avatar */}
-          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
-            <h2 className="text-base font-semibold text-gray-800 mb-4">
-              Profile Photo
-            </h2>
-            <div className="flex items-center gap-6">
-              <div className="relative flex-shrink-0">
-                {avatarUrl ? (
-                  <img
-                    src={avatarUrl}
-                    alt="Profile"
-                    className="w-24 h-24 rounded-full object-cover ring-4 ring-[#1B4F72]/10"
-                  />
-                ) : (
-                  <div className="w-24 h-24 rounded-full bg-[#1B4F72] flex items-center justify-center text-white text-3xl font-bold ring-4 ring-[#1B4F72]/10">
-                    {initials}
-                  </div>
-                )}
-                {uploading.avatar && (
+        <div className="space-y-6">
+          {/* Header card with photo */}
+          <section className="bg-card rounded-lg shadow p-4 sm:p-6">
+            <div className="flex flex-col sm:flex-row items-center sm:items-start gap-4 sm:gap-6">
+              <div className="relative">
+                <Avatar
+                  fullName={form.fullName || profile.fullName}
+                  photoURL={displayedPhoto}
+                  size={112}
+                />
+                {uploading && (
                   <div className="absolute inset-0 rounded-full bg-black/40 flex items-center justify-center">
-                    <span className="text-white text-sm font-bold">
-                      {avatarProgress}%
-                    </span>
+                    <Loader2 className="w-6 h-6 text-white animate-spin" />
                   </div>
                 )}
-              </div>
-              <div className="flex-1">
-                <p className="text-sm text-gray-600 mb-3">
-                  JPG, PNG or GIF — max 5 MB
-                </p>
-                <input
-                  type="file"
-                  ref={avatarRef}
-                  accept="image/*"
-                  onChange={handleAvatarChange}
-                  className="hidden"
-                />
                 <button
-                  type="button"
-                  onClick={() => avatarRef.current?.click()}
-                  disabled={uploading.avatar}
-                  className="px-4 py-2 bg-[#1B4F72] text-white rounded-lg text-sm font-medium hover:bg-[#154360] disabled:opacity-60"
+                  onClick={handlePickFile}
+                  disabled={uploading}
+                  className="absolute bottom-0 right-0 w-9 h-9 rounded-full bg-primary text-primary-foreground border-2 border-card flex items-center justify-center shadow hover:opacity-90 disabled:opacity-50"
+                  title="Change photo"
                 >
-                  {uploading.avatar
-                    ? `Uploading ${avatarProgress}%…`
-                    : "Upload Photo"}
+                  <Camera className="w-4 h-4" />
                 </button>
-                {uploading.avatar && <ProgressBar value={avatarProgress} />}
+                <input
+                  ref={fileInput}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) void handleUpload(f);
+                  }}
+                />
+              </div>
+
+              <div className="flex-1 text-center sm:text-left">
+                <h2 className="text-lg sm:text-xl font-semibold">
+                  {form.fullName || profile.fullName}
+                </h2>
+                <p className="text-sm text-muted-foreground break-all">
+                  {profile.email}
+                </p>
+                <div className="flex flex-wrap gap-2 mt-3 justify-center sm:justify-start">
+                  <span className="text-xs px-2 py-0.5 rounded-full border bg-purple-100 text-purple-700 border-purple-200 font-medium">
+                    {ROLE_LABEL[profile.role] ?? profile.role}
+                  </span>
+                  <span className="text-xs px-2 py-0.5 rounded-full border bg-emerald-100 text-emerald-700 border-emerald-200 font-medium capitalize">
+                    {profile.status}
+                  </span>
+                </div>
+                <p className="text-xs text-muted-foreground mt-3">
+                  Tap the camera to change your picture. Images are auto-resized
+                  for fast upload.
+                </p>
+              </div>
+
+              <div className="w-full sm:w-auto">
+                <Link
+                  href="/change-password"
+                  className="inline-flex items-center justify-center gap-2 w-full sm:w-auto border border-border rounded-md px-3 py-2 text-sm hover:bg-muted/40"
+                >
+                  <KeyRound className="w-3.5 h-3.5" />
+                  Change password
+                </Link>
               </div>
             </div>
-          </div>
+          </section>
 
-          {/* Personal Info */}
-          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
-            <h2 className="text-base font-semibold text-gray-800 mb-4">
-              Personal Information
-            </h2>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="sm:col-span-2">
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Full Name
-                </label>
-                <input
-                  type="text"
-                  value={form.displayName}
-                  onChange={(e) =>
-                    setForm({ ...form, displayName: e.target.value })
-                  }
-                  className="input-field"
-                  placeholder="Your full name"
-                />
-              </div>
-              <div className="sm:col-span-2">
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Email Address
-                </label>
-                <input
-                  type="email"
-                  value={form.email}
-                  onChange={(e) => setForm({ ...form, email: e.target.value })}
-                  className="input-field"
-                  placeholder="you@example.com"
-                />
-                {form.email !== user.email && (
-                  <p className="text-amber-600 text-xs mt-1">
-                    ⚠ Changing your email will require your current password to
-                    confirm.
-                  </p>
-                )}
-              </div>
+          {/* Personal details */}
+          <section className="bg-card rounded-lg shadow p-4 sm:p-6">
+            <h3 className="text-base font-semibold mb-4">Personal details</h3>
+            <div className="grid sm:grid-cols-2 gap-4">
+              <Field
+                label="Full name"
+                value={form.fullName}
+                onChange={(v) => setForm({ ...form, fullName: v })}
+              />
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Phone Number
-                </label>
-                <input
-                  type="tel"
-                  value={form.phone}
-                  onChange={(e) => setForm({ ...form, phone: e.target.value })}
-                  className="input-field"
-                  placeholder="+254 712 345 678"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  WhatsApp Number
-                </label>
-                <input
-                  type="tel"
-                  value={form.whatsapp}
-                  onChange={(e) =>
-                    setForm({ ...form, whatsapp: e.target.value })
-                  }
-                  className="input-field"
-                  placeholder="+254 712 345 678"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Date of Birth
-                </label>
-                <input
-                  type="date"
-                  value={form.dateOfBirth}
-                  onChange={(e) =>
-                    setForm({ ...form, dateOfBirth: e.target.value })
-                  }
-                  className="input-field"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  KRA PIN
-                </label>
-                <input
-                  type="text"
-                  value={form.kraPin}
-                  onChange={(e) => setForm({ ...form, kraPin: e.target.value })}
-                  className="input-field"
-                  placeholder="A123456789B"
-                />
-              </div>
-              <div className="sm:col-span-2">
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Address
-                </label>
-                <input
-                  type="text"
-                  value={form.address}
-                  onChange={(e) =>
-                    setForm({ ...form, address: e.target.value })
-                  }
-                  className="input-field"
-                  placeholder="Area, City, County"
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* CV Upload — employees only */}
-          {role === "employee" && (
-            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
-              <h2 className="text-base font-semibold text-gray-800 mb-1">
-                Curriculum Vitae (CV)
-              </h2>
-              <p className="text-gray-500 text-sm mb-4">PDF only — max 10 MB</p>
-              <div className="flex flex-col sm:flex-row sm:items-center gap-4">
-                {cvUrl ? (
-                  <a
-                    href={cvUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center gap-3 flex-1 bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 hover:bg-gray-100 transition-colors group"
-                  >
-                    <div className="w-10 h-10 bg-red-100 rounded-lg flex items-center justify-center flex-shrink-0">
-                      <span className="text-red-600 text-sm font-bold">
-                        PDF
-                      </span>
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium text-gray-800 truncate group-hover:text-[#1B4F72]">
-                        {cvName || "cv.pdf"}
-                      </p>
-                      <p className="text-xs text-gray-400">Click to open</p>
-                    </div>
-                  </a>
-                ) : (
-                  <div className="flex-1 bg-gray-50 border-2 border-dashed border-gray-200 rounded-xl px-4 py-5 text-center">
-                    <p className="text-gray-400 text-sm">No CV uploaded yet</p>
-                  </div>
-                )}
-                <div className="flex-shrink-0">
+                <label className="block text-sm font-medium mb-1">Email</label>
+                <div className="flex gap-2">
                   <input
-                    type="file"
-                    ref={cvRef}
-                    accept="application/pdf"
-                    onChange={handleCvChange}
-                    className="hidden"
+                    value={profile.email}
+                    readOnly
+                    disabled
+                    className="flex-1 px-3 py-2 rounded-md border border-border bg-muted/40 text-muted-foreground truncate"
                   />
                   <button
                     type="button"
-                    onClick={() => cvRef.current?.click()}
-                    disabled={uploading.cv}
-                    className="px-4 py-2.5 border-2 border-[#1B4F72] text-[#1B4F72] rounded-lg text-sm font-medium hover:bg-[#1B4F72]/5 disabled:opacity-60 whitespace-nowrap"
+                    onClick={openEmailDialog}
+                    className="border border-border rounded-md px-3 hover:bg-muted/40"
+                    title="Change email"
                   >
-                    {uploading.cv
-                      ? `Uploading ${cvProgress}%…`
-                      : cvUrl
-                        ? "Replace CV"
-                        : "Upload CV"}
+                    <Pencil className="w-4 h-4" />
                   </button>
-                  {uploading.cv && <ProgressBar value={cvProgress} />}
                 </div>
               </div>
+              <Field
+                label="Phone"
+                type="tel"
+                inputMode="tel"
+                placeholder="+254 700 000 000"
+                value={form.phone}
+                onChange={(v) => setForm({ ...form, phone: v })}
+              />
+              <Field
+                label="Date of birth"
+                type="date"
+                value={form.dateOfBirth}
+                onChange={(v) => setForm({ ...form, dateOfBirth: v })}
+              />
+              <div className="sm:col-span-2">
+                <Field
+                  label="Address"
+                  placeholder="Street, city, country"
+                  value={form.address}
+                  onChange={(v) => setForm({ ...form, address: v })}
+                />
+              </div>
+              <div className="sm:col-span-2">
+                <Field
+                  label="National ID / Passport"
+                  value={form.nationalId}
+                  onChange={(v) => setForm({ ...form, nationalId: v })}
+                />
+              </div>
+              <div className="sm:col-span-2">
+                <label className="block text-sm font-medium mb-1">
+                  About me
+                </label>
+                <textarea
+                  rows={3}
+                  value={form.bio}
+                  onChange={(e) => setForm({ ...form, bio: e.target.value })}
+                  placeholder="A short introduction"
+                  className="w-full px-3 py-2 rounded-md border border-border bg-card focus:ring-2 focus:ring-primary outline-none resize-none"
+                />
+              </div>
             </div>
+          </section>
+
+          {/* Emergency contact */}
+          <section className="bg-card rounded-lg shadow p-4 sm:p-6">
+            <h3 className="text-base font-semibold mb-4">Emergency contact</h3>
+            <div className="grid sm:grid-cols-3 gap-4">
+              <Field
+                label="Name"
+                value={form.emergencyName}
+                onChange={(v) => setForm({ ...form, emergencyName: v })}
+              />
+              <Field
+                label="Relationship"
+                placeholder="Spouse, parent, sibling…"
+                value={form.emergencyRelationship}
+                onChange={(v) => setForm({ ...form, emergencyRelationship: v })}
+              />
+              <Field
+                label="Phone"
+                type="tel"
+                inputMode="tel"
+                value={form.emergencyPhone}
+                onChange={(v) => setForm({ ...form, emergencyPhone: v })}
+              />
+            </div>
+          </section>
+
+          {/* Employee contracts */}
+          {isEmployee && (
+            <section className="bg-card rounded-lg shadow p-4 sm:p-6">
+              <h3 className="text-base font-semibold mb-4">My contracts</h3>
+              {contractsLoading ? (
+                <p className="text-sm text-muted-foreground">Loading…</p>
+              ) : contracts.length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  You do not have any contracts on file yet.
+                </p>
+              ) : (
+                <ul className="divide-y divide-border">
+                  {contracts.map((c) => (
+                    <li
+                      key={c.id}
+                      className="py-3 flex items-center justify-between text-sm"
+                    >
+                      <div>
+                        <div className="font-medium">
+                          {c.employerName || "Employer"}
+                        </div>
+                        <div className="text-xs text-muted-foreground capitalize">
+                          {c.contractType || "contract"}
+                          {c.startDate ? ` · started ${c.startDate}` : ""}
+                        </div>
+                      </div>
+                      <span
+                        className={`text-xs px-2 py-0.5 rounded-full border font-medium ${
+                          c.active !== false
+                            ? "bg-emerald-100 text-emerald-700 border-emerald-200"
+                            : "bg-gray-200 text-gray-700 border-gray-300"
+                        }`}
+                      >
+                        {c.active !== false ? "Active" : "Inactive"}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
           )}
 
-          {/* Account info (read-only) */}
-          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
-            <h2 className="text-base font-semibold text-gray-800 mb-4">
-              Account Information
-            </h2>
-            <div className="grid grid-cols-2 gap-4 text-sm">
-              <div>
-                <p className="text-gray-400 text-xs font-medium uppercase tracking-wide mb-0.5">
-                  Role
-                </p>
-                <p className="text-gray-800 font-medium capitalize">
-                  {role || "—"}
-                </p>
-              </div>
-              <div>
-                <p className="text-gray-400 text-xs font-medium uppercase tracking-wide mb-0.5">
-                  User ID
-                </p>
-                <p className="text-gray-500 font-mono text-xs truncate">
-                  {user?.uid}
-                </p>
-              </div>
-            </div>
-            <div className="mt-4 pt-4 border-t border-gray-100">
-              <p className="text-xs text-gray-400">
-                To change your password, use the "Forgot password?" link on the
-                login page, or contact your administrator.
-              </p>
-            </div>
-          </div>
-
-          <div className="flex justify-end">
+          <div className="flex justify-end pb-4">
             <button
-              type="submit"
+              onClick={handleSave}
               disabled={saving}
-              className="px-6 py-3 bg-[#F39C12] hover:bg-[#d68910] text-white rounded-xl font-semibold text-sm disabled:opacity-60 flex items-center gap-2"
+              className="inline-flex items-center bg-primary text-primary-foreground px-4 py-2 rounded-md font-medium hover:opacity-90 disabled:opacity-50"
             >
               {saving ? (
-                <>
-                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                  Saving...
-                </>
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
               ) : (
-                "Save Changes"
+                <Save className="w-4 h-4 mr-2" />
               )}
+              {saving ? "Saving…" : "Save changes"}
             </button>
           </div>
-        </form>
+        </div>
       </div>
 
-      {/* Re-authentication modal for email change */}
-      {showReauth && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm">
-            <div className="p-5 border-b border-gray-100">
-              <h2 className="font-bold text-[#1B4F72]">
-                Confirm Your Password
-              </h2>
-              <p className="text-gray-500 text-sm mt-1">
-                For security, please enter your current password to update your
-                email address.
-              </p>
-            </div>
-            <form onSubmit={handleReauth} className="p-5 space-y-4">
+      {/* Change-email modal */}
+      {emailDialogOpen && (
+        <div
+          className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4"
+          onClick={() => !changingEmail && setEmailDialogOpen(false)}
+        >
+          <div
+            className="bg-card rounded-lg shadow-xl w-full max-w-md p-5"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between mb-3">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Current Password
+                <h2 className="text-base font-semibold flex items-center gap-2">
+                  <Mail className="w-4 h-4" /> Change email
+                </h2>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Confirm your current password before updating your email.
+                </p>
+              </div>
+              <button
+                onClick={() => setEmailDialogOpen(false)}
+                disabled={changingEmail}
+                className="text-muted-foreground hover:text-foreground"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {emailMsg && (
+              <div className="mb-3 p-3 rounded-md border border-green-300 bg-green-50 text-green-700 text-xs">
+                {emailMsg}
+              </div>
+            )}
+            {emailErr && (
+              <div className="mb-3 p-3 rounded-md border border-destructive/40 bg-destructive/10 text-destructive text-xs">
+                {emailErr}
+              </div>
+            )}
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-sm font-medium mb-1">
+                  New email
+                </label>
+                <input
+                  type="email"
+                  value={emailForm.newEmail}
+                  onChange={(e) =>
+                    setEmailForm({ ...emailForm, newEmail: e.target.value })
+                  }
+                  className="w-full px-3 py-2 rounded-md border border-border bg-card focus:ring-2 focus:ring-primary outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">
+                  Current password
                 </label>
                 <input
                   type="password"
-                  value={reauthPassword}
-                  onChange={(e) => setReauthPassword(e.target.value)}
-                  required
-                  className="input-field"
-                  placeholder="••••••••"
-                  autoFocus
+                  value={emailForm.currentPassword}
+                  onChange={(e) =>
+                    setEmailForm({
+                      ...emailForm,
+                      currentPassword: e.target.value,
+                    })
+                  }
+                  className="w-full px-3 py-2 rounded-md border border-border bg-card focus:ring-2 focus:ring-primary outline-none"
                 />
               </div>
-              {reauthError && (
-                <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-red-700 text-sm">
-                  {reauthError}
-                </div>
-              )}
-              <div className="flex gap-3">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowReauth(false);
-                    setPendingEmailChange(null);
-                    setReauthPassword("");
-                  }}
-                  className="flex-1 border border-gray-300 text-gray-700 py-2.5 rounded-lg hover:bg-gray-50 text-sm font-medium"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="flex-1 bg-[#1B4F72] text-white py-2.5 rounded-lg hover:bg-[#154360] text-sm font-medium"
-                >
-                  Confirm
-                </button>
-              </div>
-            </form>
+            </div>
+
+            <div className="flex justify-end gap-2 mt-5">
+              <button
+                onClick={() => setEmailDialogOpen(false)}
+                disabled={changingEmail}
+                className="border border-border rounded-md px-3 py-2 text-sm hover:bg-muted/40"
+              >
+                Close
+              </button>
+              <button
+                onClick={handleChangeEmail}
+                disabled={changingEmail}
+                className="inline-flex items-center bg-primary text-primary-foreground px-3 py-2 rounded-md text-sm font-medium hover:opacity-90 disabled:opacity-50"
+              >
+                {changingEmail && (
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                )}
+                {changingEmail ? "Sending…" : "Send verification"}
+              </button>
+            </div>
           </div>
         </div>
       )}
     </Layout>
+  );
+}
+
+function Field({
+  label,
+  value,
+  onChange,
+  type = "text",
+  placeholder,
+  inputMode,
+}) {
+  return (
+    <div>
+      <label className="block text-sm font-medium mb-1">{label}</label>
+      <input
+        type={type}
+        value={value}
+        inputMode={inputMode}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="w-full px-3 py-2 rounded-md border border-border bg-card focus:ring-2 focus:ring-primary outline-none"
+      />
+    </div>
   );
 }

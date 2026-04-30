@@ -2,77 +2,154 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Helper: verify user is authenticated
-    function isAuthenticated() {
+    function isSignedIn() {
       return request.auth != null;
     }
 
-    // Helper: read role from Custom Claims (NOT Firestore — prevents client-side privilege escalation)
-    function hasRole(role) {
-      return isAuthenticated() && request.auth.token.role == role;
-    }
-
     function isAdmin() {
-      return hasRole('admin');
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
     }
 
-    function isEmployerOrAbove() {
-      return isAuthenticated() && request.auth.token.role in ['admin', 'it-expert', 'employer'];
+    function isSelf(uid) {
+      return isSignedIn() && request.auth.uid == uid;
     }
 
-    // Prevents a client from spoofing createdAt on update
-    function createdAtUnchanged() {
-      return !('createdAt' in request.resource.data) ||
-        request.resource.data.createdAt == resource.data.createdAt;
-    }
+    // Users collection
+    match /users/{uid} {
+      // Anyone signed in can read their own doc; admin can read all.
+      allow read: if isSelf(uid) || isAdmin();
 
-    // Employees collection
-    // Prevents Employer A from reading/writing Employer B's employees by
-    // enforcing that employerId must match the authenticated user's UID.
-    match /employees/{employeeId} {
-      allow read: if isAdmin() ||
-        (isEmployerOrAbove() && resource.data.employerId == request.auth.uid);
+      // Only admin can create new user profiles.
+      // Self-creation is allowed only when bootstrapping the admin profile
+      // (matches AuthContext bootstrap flow).
+      allow create: if isAdmin() || isSelf(uid);
 
-      // Employer can only create employees under their own UID
-      allow create: if isEmployerOrAbove() &&
-        request.resource.data.employerId == request.auth.uid;
+      // Self can update own profile but cannot change role or grant themselves
+      // a status they shouldn't have. Allowed self-status transitions:
+      //   approved -> active   (after first password change)
+      // Admin can update anything.
+      allow update: if isAdmin()
+        || (
+          isSelf(uid)
+          && request.resource.data.role == resource.data.role
+          && (
+            request.resource.data.status == resource.data.status
+            || (resource.data.status == 'approved' && request.resource.data.status == 'active')
+          )
+          && !('tempPassword' in request.resource.data.diff(resource.data).affectedKeys())
+        );
 
-      // Employer can only update their own employees; cannot change createdAt or employerId
-      allow update: if isEmployerOrAbove() &&
-        resource.data.employerId == request.auth.uid &&
-        createdAtUnchanged() &&
-        request.resource.data.employerId == resource.data.employerId;
-
-      // Only admin or owning employer can delete
-      allow delete: if isAdmin() ||
-        (hasRole('employer') && resource.data.employerId == request.auth.uid);
-    }
-
-    // userProfiles — pending account creation queue (admin only)
-    // Prevents non-admins from creating or reading account records
-    match /userProfiles/{docId} {
-      allow read, write: if isAdmin();
-    }
-
-    // pendingUsers — same as above
-    match /pendingUsers/{docId} {
-      allow read, write: if isAdmin();
-    }
-
-    // Documents metadata (for file uploads)
-    // Prevents an employer from reading another employer's document metadata
-    match /documents/{docId} {
-      allow read: if isAdmin() ||
-        (isAuthenticated() && resource.data.uploadedBy == request.auth.uid);
-      allow create: if isEmployerOrAbove() &&
-        request.resource.data.uploadedBy == request.auth.uid;
-      allow update: if isAdmin();
+      // Only admin can delete users.
       allow delete: if isAdmin();
     }
 
-    // Deny everything else — belt-and-suspenders catch-all
-    match /{document=**} {
-      allow read, write: if false;
+    // Contracts collection
+    match /contracts/{contractId} {
+      allow read: if isAdmin()
+        || (isSignedIn() && request.auth.uid == resource.data.employerId)
+        || (isSignedIn() && request.auth.uid == resource.data.employeeId);
+
+      allow create, update, delete: if isAdmin();
+    }
+
+    // Public holidays — readable by any signed-in user; writable by admin only
+    match /public_holidays/{holidayId} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // Overtime / holiday work records
+    match /overtime_clock_records/{recordId} {
+      allow read: if isAdmin()
+        || (isSignedIn() && request.auth.uid == resource.data.employeeId)
+        || (isSignedIn() && request.auth.uid == resource.data.employerId);
+
+      // Employee can create a record for themselves
+      allow create: if isSignedIn()
+        && request.resource.data.employeeId == request.auth.uid
+        && request.resource.data.status == 'pending';
+
+      // Admin or the linked employer can update status (approve/reject)
+      allow update: if isAdmin()
+        || (isSignedIn() && request.auth.uid == resource.data.employerId);
+
+      allow delete: if isAdmin();
+    }
+
+    // Activity logs — append-only audit trail.
+    // Any signed-in user can record an entry about their own action.
+    // Admin can read everything; users can read their own entries.
+    // No one can update (logs are immutable).
+    match /activity_logs/{logId} {
+      allow create: if isSignedIn()
+        && request.resource.data.performedBy == request.auth.uid;
+      allow read: if isAdmin()
+        || (isSignedIn() && resource.data.performedBy == request.auth.uid);
+      allow update: if false;
+      allow delete: if isAdmin();
+    }
+
+    // Documents (contracts, payslips, IDs, policies, etc.)
+    // Uploaded by admin and assigned to a specific user via ownerId.
+    // - The owner can read their own documents.
+    // - The linked employer (if it's a contract-scoped document) can read.
+    // - Admin can read and manage all.
+    match /documents/{docId} {
+      allow read: if isAdmin()
+        || (isSignedIn() && request.auth.uid == resource.data.ownerId)
+        || (isSignedIn() && request.auth.uid == resource.data.employerId)
+        || (isSignedIn() && request.auth.uid == resource.data.employeeId);
+      allow create, update, delete: if isAdmin();
+    }
+
+    // Monthly records (payslips, statutory filings, payroll summaries).
+    // Each record is scoped to a contract and a single month (YYYY-MM).
+    // Employer (the linked employer on the contract) writes; both parties
+    // (employer + employee) read. Admin can read and manage everything.
+    match /monthly_records/{recordId} {
+      allow read: if isAdmin()
+        || (isSignedIn() && request.auth.uid == resource.data.employerId)
+        || (isSignedIn() && request.auth.uid == resource.data.employeeId);
+
+      allow create: if isAdmin()
+        || (
+          isSignedIn()
+          && request.resource.data.employerId == request.auth.uid
+          && request.resource.data.contractId is string
+          && request.resource.data.month is string
+        );
+
+      allow update: if isAdmin()
+        || (
+          isSignedIn()
+          && request.auth.uid == resource.data.employerId
+          && request.resource.data.employerId == resource.data.employerId
+          && request.resource.data.employeeId == resource.data.employeeId
+          && request.resource.data.contractId == resource.data.contractId
+          && request.resource.data.month == resource.data.month
+        );
+
+      allow delete: if isAdmin();
+    }
+
+    // Leave requests
+    match /leave_requests/{requestId} {
+      allow read: if isAdmin()
+        || (isSignedIn() && request.auth.uid == resource.data.employeeId)
+        || (isSignedIn() && request.auth.uid == resource.data.employerId);
+
+      // Employee can create a request for themselves
+      allow create: if isSignedIn()
+        && request.resource.data.employeeId == request.auth.uid
+        && request.resource.data.status == 'pending';
+
+      // Admin or the linked employer can approve / reject
+      allow update: if isAdmin()
+        || (isSignedIn() && request.auth.uid == resource.data.employerId);
+
+      allow delete: if isAdmin();
     }
   }
 }

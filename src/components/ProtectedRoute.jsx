@@ -1,25 +1,34 @@
+import { useEffect } from "react";
+import { useLocation } from "wouter";
 import { useAuth } from "../context/AuthContext";
-import { Redirect } from "wouter";
+import Spinner from "./Spinner";
 
 export default function ProtectedRoute({ children, allowedRoles }) {
-  const { user, role, loading } = useAuth();
+  const { user, profile, loading } = useAuth();
+  const [location, navigate] = useLocation();
 
-  if (loading) {
+  useEffect(() => {
+    if (loading) return;
+    if (!user || !profile) {
+      navigate("/login", { replace: true });
+      return;
+    }
+    if (profile.mustChangePassword && location !== "/set-password") {
+      navigate("/set-password", { replace: true });
+      return;
+    }
+    if (allowedRoles && !allowedRoles.includes(profile.role)) {
+      navigate("/unauthorized", { replace: true });
+    }
+  }, [user, profile, loading, location, allowedRoles, navigate]);
+
+  if (loading || !user || !profile) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-[#F5F7FA]">
-        <div className="flex flex-col items-center gap-3">
-          <div className="w-10 h-10 border-4 border-[#1B4F72] border-t-transparent rounded-full animate-spin" />
-          <p className="text-[#1B4F72] font-medium">Loading...</p>
-        </div>
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <Spinner />
       </div>
     );
   }
-
-  if (!user) return <Redirect to="/login" />;
-
-  if (allowedRoles && role && !allowedRoles.includes(role)) {
-    return <Redirect to="/unauthorized" />;
-  }
-
+  if (allowedRoles && !allowedRoles.includes(profile.role)) return null;
   return children;
 }
