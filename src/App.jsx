@@ -30,6 +30,9 @@ const ComingSoon = lazy(() => import("./pages/ComingSoon"));
 
 const EmployerDashboard = lazy(() => import("./pages/employer/Dashboard"));
 const EmployerMyEmployees = lazy(() => import("./pages/employer/MyEmployees"));
+const EmployerEmployeeDetail = lazy(
+  () => import("./pages/employer/EmployeeDetail"),
+);
 const EmployerLeaveRequests = lazy(
   () => import("./pages/employer/LeaveRequests"),
 );
@@ -140,6 +143,13 @@ function Router() {
           <ProtectedRoute allowedRoles={[ROLES.EMPLOYER]}>
             <EmployerMyEmployees />
           </ProtectedRoute>
+        </Route>
+        <Route path="/employer/employees/:contractId">
+          {(params) => (
+            <ProtectedRoute allowedRoles={[ROLES.EMPLOYER]}>
+              <EmployerEmployeeDetail />
+            </ProtectedRoute>
+          )}
         </Route>
         <Route path="/employer/leave-requests">
           <ProtectedRoute allowedRoles={[ROLES.EMPLOYER]}>
