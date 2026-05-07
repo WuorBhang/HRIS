@@ -94,7 +94,7 @@ export default function AuditLogs() {
     <Layout>
       <PageHeader title="Audit logs" subtitle="System-wide activity history." />
       <Card>
-        <div className="grid sm:grid-cols-4 gap-3 mb-4">
+        <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 mb-4">
           <div className="sm:col-span-2">
             <SearchInput
               value={search}
@@ -136,17 +136,17 @@ export default function AuditLogs() {
                   className={`w-2 h-2 rounded-full mt-2 shrink-0 ${tone(l.action)}`}
                 />
                 <div className="flex-1 min-w-0">
-                  <div className="text-sm font-medium capitalize">
+                  <div className="text-sm font-medium capitalize break-words">
                     {humanize(l.action)}
                   </div>
-                  <div className="text-xs text-muted-foreground">
+                  <div className="text-xs text-muted-foreground break-words">
                     {users[l.performedBy]?.fullName || l.performedBy} · {l.role}{" "}
                     · {formatTs(l.createdAt)}
                   </div>
                   {l.metadata && Object.keys(l.metadata).length > 0 && (
-                    <div className="text-xs text-muted-foreground mt-1">
+                    <div className="text-xs text-muted-foreground mt-1 flex flex-wrap gap-x-3 gap-y-1">
                       {Object.entries(l.metadata).map(([k, v]) => (
-                        <span key={k} className="mr-3">
+                        <span key={k} className="break-words">
                           <b>{humanize(k)}:</b> {String(v)}
                         </span>
                       ))}

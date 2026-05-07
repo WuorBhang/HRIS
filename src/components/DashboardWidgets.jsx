@@ -106,7 +106,10 @@ export const RecentDocuments = ({
     ) : (
       <ul className="divide-y divide-border">
         {items.map((d) => (
-          <li key={d.id} className="py-2.5 flex items-center gap-3 text-sm">
+          <li
+            key={d.id}
+            className="py-2.5 flex items-center gap-3 text-sm flex-wrap sm:flex-nowrap"
+          >
             <span className="w-9 h-9 rounded-md bg-primary/10 text-primary flex items-center justify-center shrink-0">
               <FileText className="w-4 h-4" />
             </span>
@@ -123,7 +126,7 @@ export const RecentDocuments = ({
                 href={d.url}
                 target="_blank"
                 rel="noreferrer"
-                className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded bg-primary text-primary-foreground hover:opacity-90"
+                className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded bg-primary text-primary-foreground hover:opacity-90 ml-12 sm:ml-0 shrink-0"
               >
                 <Download className="w-3.5 h-3.5" /> Open
               </a>

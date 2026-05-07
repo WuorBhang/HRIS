@@ -76,11 +76,11 @@ export default function MySubmissions({ mode }) {
 
   return (
     <section className="mt-8 bg-card rounded-lg shadow p-4 sm:p-6 max-w-2xl">
-      <div className="flex items-center justify-between gap-3 mb-3">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-3 mb-3">
         <h2 className="text-base sm:text-lg font-semibold text-primary">
           {title}
         </h2>
-        <div className="flex items-center gap-2 text-xs">
+        <div className="flex flex-wrap items-center gap-2 text-xs">
           <Pill t="amber">Pending {counts.pending}</Pill>
           <Pill t="green">Approved {counts.approved}</Pill>
           <Pill t="red">Rejected {counts.rejected}</Pill>
