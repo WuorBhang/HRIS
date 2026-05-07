@@ -1,10 +1,10 @@
+// Employee payslips placeholder.
 import ComingSoon from "../ComingSoon";
-
-export default function EmployeePayslips() {
+export default function Payslips() {
   return (
     <ComingSoon
-      title="My Payslips"
-      description="Coming in Sprint 3 — view and download your monthly payslips."
+      title="Payslips"
+      description="View your monthly payslips here."
     />
   );
 }

@@ -217,7 +217,7 @@ function LoginCardContent({
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             className="w-full px-3 py-2 rounded-md border border-border bg-card focus:ring-2 focus:ring-primary focus:border-transparent outline-none"
-            placeholder="you@company.com"
+            placeholder="email.address@example.com"
           />
         </div>
         <div>
@@ -229,7 +229,7 @@ function LoginCardContent({
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             className="w-full px-3 py-2 rounded-md border border-border bg-card focus:ring-2 focus:ring-primary focus:border-transparent outline-none"
-            placeholder="••••••••"
+            placeholder="Your Password"
           />
         </div>
         <button
@@ -237,7 +237,7 @@ function LoginCardContent({
           disabled={loading}
           className="w-full bg-primary text-primary-foreground py-2.5 rounded-md font-medium hover:opacity-90 transition disabled:opacity-50"
         >
-          {loading ? "Signing in…" : "Sign in"}
+          {loading ? "Signing in" : "Sign in"}
         </button>
       </form>
 
@@ -248,7 +248,7 @@ function LoginCardContent({
           disabled={showReset}
           className="text-sm text-primary hover:underline disabled:opacity-50"
         >
-          {showReset ? "Sending…" : "Forgot your password?"}
+          {showReset ? "Sendingâ€¦" : "Forgot your password?"}
         </button>
       </div>
     </>

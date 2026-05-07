@@ -1,45 +1,86 @@
+// Upcoming Kenya public holidays widget.
 import { useEffect, useState } from "react";
 import { subscribeHolidays, getUpcomingHolidays } from "../lib/holidayService";
-import {
-  HOLIDAY_FETCH_WINDOW_DAYS,
-  HOLIDAY_DISPLAY_WINDOW_DAYS,
-} from "../lib/constants";
+import { HOLIDAY_FETCH_DAYS, HOLIDAY_DISPLAY_DAYS } from "../lib/constants";
 
-export default function UpcomingHolidays() {
-  const [upcoming, setUpcoming] = useState([]);
-
+export default function UpcomingHolidays({ horizontal = false }) {
+  const [list, setList] = useState([]);
   useEffect(() => {
-    // Detect holidays up to FETCH_WINDOW days ahead, but only surface those
-    // that fall within the DISPLAY_WINDOW so the widget stays focused.
-    const unsub = subscribeHolidays((list) => {
-      const detected = getUpcomingHolidays(list, HOLIDAY_FETCH_WINDOW_DAYS);
+    const unsub = subscribeHolidays((all) => {
       const seen = new Set();
       const deduped = [];
-      for (const h of detected) {
-        const key = `${h.date}|${(h.name || "").toLowerCase().trim()}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        deduped.push(h);
+      for (const h of getUpcomingHolidays(all, HOLIDAY_FETCH_DAYS)) {
+        const k = `${h.date}|${(h.name || "").toLowerCase()}`;
+        if (!seen.has(k)) {
+          seen.add(k);
+          deduped.push(h);
+        }
       }
-      setUpcoming(
-        deduped.filter((h) => h.daysAway <= HOLIDAY_DISPLAY_WINDOW_DAYS),
-      );
+      setList(deduped.filter((h) => h.daysAway <= HOLIDAY_DISPLAY_DAYS));
     });
     return () => unsub();
   }, []);
+  if (!list.length) return null;
 
-  if (upcoming.length === 0) return null;
+  if (horizontal) {
+    return (
+      <div
+        className="rounded-lg shadow px-4 py-3 mb-6 flex items-center gap-4 overflow-x-auto"
+        style={{ backgroundColor: "#f39c12", color: "#1b4f72" }}
+      >
+        <h3
+          className="font-semibold whitespace-nowrap text-sm"
+          style={{ color: "#1b4f72" }}
+        >
+          Upcoming public holidays:
+        </h3>
+        <ul className="flex items-center gap-3 flex-1">
+          {list.map((h) => (
+            <li
+              key={h.id}
+              className="flex items-center gap-2 text-sm whitespace-nowrap pr-3 last:pr-0"
+              style={{
+                color: "#1b4f72",
+                borderRight: "1px solid rgba(27,79,114,0.3)",
+              }}
+            >
+              <span className="font-semibold">{h.name}</span>
+              <span className="text-xs opacity-80">
+                {h.dateObj.toLocaleDateString("en-GB", {
+                  day: "2-digit",
+                  month: "short",
+                })}
+              </span>
+              <span
+                className="text-xs px-2 py-0.5 rounded-full font-semibold"
+                style={{
+                  backgroundColor: "#1b4f72",
+                  color: "#f39c12",
+                }}
+              >
+                {h.daysAway === 0
+                  ? "Today"
+                  : h.daysAway === 1
+                    ? "Tomorrow"
+                    : `In ${h.daysAway}d`}
+              </span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    );
+  }
 
   return (
     <div className="bg-card rounded-lg shadow p-5 mb-6 border-l-4 border-accent">
-      <div className="flex items-center justify-between mb-3">
-        <h3 className="font-semibold text-primary">Upcoming public holidays</h3>
-      </div>
+      <h3 className="font-semibold text-primary mb-3">
+        Upcoming public holidays
+      </h3>
       <ul className="space-y-2">
-        {upcoming.map((h) => (
+        {list.map((h) => (
           <li
             key={h.id}
-            className="flex items-center justify-between text-sm border-b border-border last:border-b-0 pb-2 last:pb-0"
+            className="flex items-center justify-between text-sm border-b border-border last:border-0 pb-2 last:pb-0"
           >
             <div>
               <div className="font-medium">{h.name}</div>
@@ -53,13 +94,7 @@ export default function UpcomingHolidays() {
               </div>
             </div>
             <span
-              className={`text-xs px-2 py-1 rounded-full font-medium ${
-                h.daysAway === 0
-                  ? "bg-accent text-accent-foreground"
-                  : h.daysAway <= 3
-                    ? "bg-accent/30 text-accent"
-                    : "bg-muted/50 text-muted-foreground"
-              }`}
+              className={`text-xs px-2 py-1 rounded-full font-medium ${h.daysAway === 0 ? "bg-accent text-accent-foreground" : h.daysAway <= 3 ? "bg-accent/30 text-accent" : "bg-muted/50 text-muted-foreground"}`}
             >
               {h.daysAway === 0
                 ? "Today"

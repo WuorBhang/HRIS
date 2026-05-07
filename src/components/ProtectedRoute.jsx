@@ -1,3 +1,4 @@
+// Route guard — redirects unauthenticated users or wrong roles.
 import { useEffect } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "../context/AuthContext";
@@ -17,18 +18,16 @@ export default function ProtectedRoute({ children, allowedRoles }) {
       navigate("/set-password", { replace: true });
       return;
     }
-    if (allowedRoles && !allowedRoles.includes(profile.role)) {
+    if (allowedRoles && !allowedRoles.includes(profile.role))
       navigate("/unauthorized", { replace: true });
-    }
   }, [user, profile, loading, location, allowedRoles, navigate]);
 
-  if (loading || !user || !profile) {
+  if (loading || !user || !profile)
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
         <Spinner />
       </div>
     );
-  }
   if (allowedRoles && !allowedRoles.includes(profile.role)) return null;
   return children;
 }

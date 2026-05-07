@@ -1,222 +1,162 @@
+// Profile page: shows the signed-in user's details and avatar.
+// - Admins can edit their own personal details inline (other users are
+//   edited from the admin Users page).
+// - Employer / employee users see read-only fields and must contact the
+//   admin to make changes (this is also enforced by firestore.rules).
 import { useEffect, useRef, useState } from "react";
-import { Link } from "wouter";
 import {
   collection,
-  doc,
   getDocs,
   query,
   serverTimestamp,
   updateDoc,
+  doc,
   where,
 } from "firebase/firestore";
+import { useAuth } from "../context/AuthContext";
+import { db } from "../lib/firebase";
+import { supabase, BUCKETS } from "../lib/supabase";
 import {
-  EmailAuthProvider,
-  reauthenticateWithCredential,
-  verifyBeforeUpdateEmail,
-  updateProfile,
-} from "firebase/auth";
-import { Camera, Loader2, Save, KeyRound, Mail, Pencil, X } from "lucide-react";
-
+  COLLECTIONS,
+  ROLES,
+  SUBSCRIPTION_STATUS_LABELS,
+} from "../lib/constants";
+import { formatDate } from "../lib/utils";
+import { AUDIT, logAction } from "../lib/audit";
+import { Button, Alert, Card, PageHeader, Input, Textarea } from "../lib/ui";
 import Layout from "../components/Layout";
 import Avatar from "../components/Avatar";
-import { auth, db } from "../lib/firebase";
-import { supabase, SUPABASE_BUCKETS } from "../lib/supabase";
-import { useAuth } from "../context/AuthContext";
-import { COLLECTIONS, ROLES } from "../lib/constants";
-import { AUDIT_ACTIONS, logAction } from "../lib/audit";
 
-const MAX_AVATAR_DIM = 480;
-const MAX_AVATAR_BYTES = 5 * 1024 * 1024;
-
-// Resize the chosen image down to MAX_AVATAR_DIM (longest side) and re-encode
-// as JPEG so uploads stay small and fast even from phone cameras.
-async function compressImage(file) {
-  const previewUrl = URL.createObjectURL(file);
-  const img = await new Promise((resolve, reject) => {
-    const i = new Image();
-    i.onload = () => resolve(i);
-    i.onerror = () => reject(new Error("Could not read the image."));
-    i.src = previewUrl;
+// Resize image to 480px JPEG dataURL.
+const resize = (file) =>
+  new Promise((res) => {
+    const img = new Image();
+    img.onload = () => {
+      const max = 480;
+      const scale = Math.min(1, max / Math.max(img.width, img.height));
+      const c = document.createElement("canvas");
+      c.width = img.width * scale;
+      c.height = img.height * scale;
+      c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+      c.toBlob((b) => res(b), "image/jpeg", 0.88);
+    };
+    img.src = URL.createObjectURL(file);
   });
-  const ratio = Math.min(1, MAX_AVATAR_DIM / Math.max(img.width, img.height));
-  const w = Math.round(img.width * ratio);
-  const h = Math.round(img.height * ratio);
-  const canvas = document.createElement("canvas");
-  canvas.width = w;
-  canvas.height = h;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) throw new Error("Canvas not supported in this browser.");
-  ctx.drawImage(img, 0, 0, w, h);
-  const blob = await new Promise((resolve) =>
-    canvas.toBlob(resolve, "image/jpeg", 0.85),
-  );
-  if (!blob) throw new Error("Could not encode image.");
-  return { blob, previewUrl };
-}
 
-const ROLE_LABEL = {
-  employer: "Employer",
-  employee: "Employee",
+const EMPTY_FORM = {
+  fullName: "",
+  phone: "",
+  address: "",
+  bio: "",
+  dateOfBirth: "",
+  nationalId: "",
+  emergencyName: "",
+  emergencyRelationship: "",
+  emergencyPhone: "",
 };
+
+function profileToForm(p) {
+  if (!p) return { ...EMPTY_FORM };
+  const ec = p.emergencyContact;
+  let emergencyName = "";
+  let emergencyRelationship = "";
+  let emergencyPhone = "";
+  if (ec && typeof ec === "object") {
+    emergencyName = ec.name || "";
+    emergencyRelationship = ec.relationship || "";
+    emergencyPhone = ec.phone || "";
+  } else if (typeof ec === "string") {
+    emergencyName = ec;
+  }
+  return {
+    fullName: p.fullName || "",
+    phone: p.phone || "",
+    address: p.address || "",
+    bio: p.bio || "",
+    dateOfBirth: p.dateOfBirth || "",
+    nationalId: p.nationalId || "",
+    emergencyName,
+    emergencyRelationship,
+    emergencyPhone,
+  };
+}
 
 export default function Profile() {
   const { user, profile, refreshProfile } = useAuth();
-
-  const [form, setForm] = useState({
-    fullName: "",
-    phone: "",
-    address: "",
-    bio: "",
-    dateOfBirth: "",
-    nationalId: "",
-    emergencyName: "",
-    emergencyRelationship: "",
-    emergencyPhone: "",
-  });
-  const [photoURL, setPhotoURL] = useState("");
-  // Local blob URL shown during upload so the new picture appears instantly,
-  // before the Firebase Storage URL has resolved.
-  const [optimisticPhoto, setOptimisticPhoto] = useState(null);
-
+  const [err, setErr] = useState("");
+  const [ok, setOk] = useState("");
+  const [busy, setBusy] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const [savedMsg, setSavedMsg] = useState("");
-  const [savedErr, setSavedErr] = useState("");
-  const fileInput = useRef(null);
-
-  // Employee-only contracts list.
+  const [editing, setEditing] = useState(false);
+  const [form, setForm] = useState(EMPTY_FORM);
   const [contracts, setContracts] = useState([]);
-  const [contractsLoading, setContractsLoading] = useState(false);
+  const avatarRef = useRef();
 
-  // Email-change modal state.
-  const [emailDialogOpen, setEmailDialogOpen] = useState(false);
-  const [emailForm, setEmailForm] = useState({
-    newEmail: "",
-    currentPassword: "",
-  });
-  const [emailMsg, setEmailMsg] = useState("");
-  const [emailErr, setEmailErr] = useState("");
-  const [changingEmail, setChangingEmail] = useState(false);
+  const isAdmin = profile?.role === ROLES.ADMIN;
 
-  // Hydrate the form whenever the profile doc changes.
   useEffect(() => {
     if (!profile) return;
-    setForm({
-      fullName: profile.fullName ?? "",
-      phone: profile.phone ?? "",
-      address: profile.address ?? "",
-      bio: profile.bio ?? "",
-      dateOfBirth: profile.dateOfBirth ?? "",
-      nationalId: profile.nationalId ?? "",
-      emergencyName: profile.emergencyContact?.name ?? "",
-      emergencyRelationship: profile.emergencyContact?.relationship ?? "",
-      emergencyPhone: profile.emergencyContact?.phone ?? "",
-    });
-    setPhotoURL(profile.photoURL ?? "");
-  }, [profile]);
-
-  // Free the temporary blob URL once we no longer need it.
-  useEffect(() => {
-    return () => {
-      if (optimisticPhoto) URL.revokeObjectURL(optimisticPhoto);
-    };
-  }, [optimisticPhoto]);
-
-  // Load the employee's contracts (denormalized employer info already on the doc).
-  useEffect(() => {
-    if (!profile || profile.role !== ROLES.EMPLOYEE) return;
-    let cancelled = false;
-    setContractsLoading(true);
-    (async () => {
-      try {
-        const q = query(
+    if (profile.role === ROLES.EMPLOYEE) {
+      getDocs(
+        query(
           collection(db, COLLECTIONS.CONTRACTS),
-          where("employeeId", "==", profile.id),
-        );
-        const snap = await getDocs(q);
-        if (cancelled) return;
-        setContracts(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
-      } catch {
-        if (!cancelled) setContracts([]);
-      } finally {
-        if (!cancelled) setContractsLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+          where("employeeId", "==", user.uid),
+        ),
+      )
+        .then((s) =>
+          setContracts(s.docs.map((d) => ({ id: d.id, ...d.data() }))),
+        )
+        .catch(() => {});
+    }
+  }, [profile]); // eslint-disable-line
+
+  // Keep the form in sync with the loaded profile so Cancel reverts cleanly.
+  useEffect(() => {
+    setForm(profileToForm(profile));
   }, [profile]);
 
-  const handlePickFile = () => fileInput.current?.click();
-
-  const handleUpload = async (file) => {
-    if (!user || !profile) return;
-    setSavedMsg("");
-    setSavedErr("");
-    if (!file.type.startsWith("image/")) {
-      setSavedErr("Please choose an image file.");
-      return;
-    }
-    if (file.size > MAX_AVATAR_BYTES) {
-      setSavedErr("Image is too large. Maximum size is 5 MB.");
-      return;
-    }
-    setUploading(true);
+  // Upload avatar to Supabase.
+  const onAvatar = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setBusy(true);
+    setErr("");
+    setOk("");
     try {
-      const { blob, previewUrl } = await compressImage(file);
-      setOptimisticPhoto(previewUrl);
+      const blob = await resize(file);
       const path = `${user.uid}/avatar.jpg`;
-      const { error: upErr } = await supabase.storage
-        .from(SUPABASE_BUCKETS.AVATARS)
+      const { error } = await supabase.storage
+        .from(BUCKETS.AVATARS)
         .upload(path, blob, { contentType: "image/jpeg", upsert: true });
-      if (upErr) {
-        throw new Error(
-          upErr.message?.includes("row-level security")
-            ? "Supabase blocked the upload. Make sure the 'avatars' bucket exists and allows uploads (see SUPABASE_SETUP.md)."
-            : upErr.message || "Photo upload failed.",
-        );
-      }
-      const { data: pub } = supabase.storage
-        .from(SUPABASE_BUCKETS.AVATARS)
-        .getPublicUrl(path);
-      // Cache-bust so the new picture replaces the old one in <img> tags
-      // even though the path is identical.
-      const url = `${pub.publicUrl}?v=${Date.now()}`;
+      if (error) throw new Error(error.message);
+      const url =
+        supabase.storage.from(BUCKETS.AVATARS).getPublicUrl(path).data
+          ?.publicUrl + `?t=${Date.now()}`;
       await updateDoc(doc(db, COLLECTIONS.USERS, user.uid), {
         photoURL: url,
         updatedAt: serverTimestamp(),
       });
-      // Mirror onto Firebase Auth profile so other surfaces (e.g. email links)
-      // can use the same picture.
-      try {
-        await updateProfile(auth.currentUser, { photoURL: url });
-      } catch {
-        /* non-fatal */
-      }
-      setPhotoURL(url);
-      setOptimisticPhoto(null);
       await refreshProfile();
-      setSavedMsg("Profile photo updated.");
-    } catch (e) {
-      setOptimisticPhoto(null);
-      setSavedErr(e.message || "Photo upload failed.");
+      setOk("Avatar updated.");
+    } catch (e2) {
+      setErr(e2.message);
     } finally {
-      setUploading(false);
-      if (fileInput.current) fileInput.current.value = "";
+      setBusy(false);
     }
   };
 
-  const handleSave = async () => {
-    if (!user) return;
-    setSavedMsg("");
-    setSavedErr("");
+  const setField = (k) => (v) => setForm((f) => ({ ...f, [k]: v }));
+
+  const onSave = async () => {
+    setErr("");
+    setOk("");
     if (!form.fullName.trim()) {
-      setSavedErr("Full name is required.");
+      setErr("Full name is required.");
       return;
     }
     setSaving(true);
     try {
-      await updateDoc(doc(db, COLLECTIONS.USERS, user.uid), {
+      const payload = {
         fullName: form.fullName.trim(),
         phone: form.phone.trim(),
         address: form.address.trim(),
@@ -229,466 +169,305 @@ export default function Profile() {
           phone: form.emergencyPhone.trim(),
         },
         updatedAt: serverTimestamp(),
+      };
+      await updateDoc(doc(db, COLLECTIONS.USERS, user.uid), payload);
+      logAction(AUDIT.PROFILE_UPDATED, user.uid, profile?.role, {
+        self: true,
       });
-      // Keep Firebase Auth's displayName in sync with the saved full name.
-      if (form.fullName.trim() !== auth.currentUser?.displayName) {
-        try {
-          await updateProfile(auth.currentUser, {
-            displayName: form.fullName.trim(),
-          });
-        } catch {
-          /* non-fatal */
-        }
-      }
       await refreshProfile();
-      logAction(AUDIT_ACTIONS.PROFILE_UPDATED, user.uid, profile?.role, {
-        fields: [
-          "fullName",
-          "phone",
-          "address",
-          "bio",
-          "dateOfBirth",
-          "nationalId",
-          "emergencyContact",
-        ],
-      });
-      setSavedMsg("Profile saved.");
-    } catch (e) {
-      setSavedErr(e.message || "Could not save profile.");
+      setEditing(false);
+      setOk("Profile updated.");
+    } catch (e2) {
+      setErr(e2.message || "Could not save profile.");
     } finally {
       setSaving(false);
     }
   };
 
-  const openEmailDialog = () => {
-    setEmailForm({ newEmail: profile?.email || "", currentPassword: "" });
-    setEmailMsg("");
-    setEmailErr("");
-    setEmailDialogOpen(true);
+  const onCancel = () => {
+    setForm(profileToForm(profile));
+    setEditing(false);
+    setErr("");
+    setOk("");
   };
-
-  const handleChangeEmail = async () => {
-    const fbUser = auth.currentUser;
-    if (!fbUser || !profile || !fbUser.email) return;
-    setEmailMsg("");
-    setEmailErr("");
-    const newEmail = emailForm.newEmail.trim().toLowerCase();
-    if (!newEmail || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(newEmail)) {
-      setEmailErr("Enter a valid email address.");
-      return;
-    }
-    if (!emailForm.currentPassword) {
-      setEmailErr("Current password is required.");
-      return;
-    }
-    if (newEmail === fbUser.email.toLowerCase()) {
-      setEmailErr("That is already your current email.");
-      return;
-    }
-    setChangingEmail(true);
-    try {
-      const cred = EmailAuthProvider.credential(
-        fbUser.email,
-        emailForm.currentPassword,
-      );
-      await reauthenticateWithCredential(fbUser, cred);
-      // Modern Firebase requires email verification before the change takes
-      // effect — a confirmation link is sent to the new address.
-      await verifyBeforeUpdateEmail(fbUser, newEmail);
-      setEmailMsg(
-        `Verification link sent to ${newEmail}. Open it to finish updating your email — your sign-in email will only change after you confirm.`,
-      );
-      setEmailForm({ newEmail: "", currentPassword: "" });
-    } catch (e) {
-      const code = e.code ?? "";
-      setEmailErr(
-        code === "auth/wrong-password" || code === "auth/invalid-credential"
-          ? "Current password is incorrect."
-          : code === "auth/email-already-in-use"
-            ? "That email is already used by another account."
-            : code === "auth/operation-not-allowed"
-              ? "Email change is not permitted — please contact your admin."
-              : e.message || "Failed to update email.",
-      );
-    } finally {
-      setChangingEmail(false);
-    }
-  };
-
-  if (!profile) {
-    return (
-      <Layout>
-        <div className="text-muted-foreground">Loading profile…</div>
-      </Layout>
-    );
-  }
-
-  const displayedPhoto = optimisticPhoto ?? photoURL;
-  const isEmployee = profile.role === ROLES.EMPLOYEE;
 
   return (
     <Layout>
-      <div className="max-w-4xl">
-        <div className="mb-6">
-          <h1 className="text-xl sm:text-2xl font-bold text-primary">
-            My Profile
-          </h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            Update your personal details and profile picture.
-          </p>
-        </div>
-
-        {savedMsg && (
-          <div className="mb-4 p-3 rounded-md border border-green-300 bg-green-50 text-green-700 text-sm">
-            {savedMsg}
-          </div>
-        )}
-        {savedErr && (
-          <div className="mb-4 p-3 rounded-md border border-destructive/40 bg-destructive/10 text-destructive text-sm">
-            {savedErr}
-          </div>
-        )}
-
-        <div className="space-y-6">
-          {/* Header card with photo */}
-          <section className="bg-card rounded-lg shadow p-4 sm:p-6">
-            <div className="flex flex-col sm:flex-row items-center sm:items-start gap-4 sm:gap-6">
-              <div className="relative">
-                <Avatar
-                  fullName={form.fullName || profile.fullName}
-                  photoURL={displayedPhoto}
-                  size={112}
-                />
-                {uploading && (
-                  <div className="absolute inset-0 rounded-full bg-black/40 flex items-center justify-center">
-                    <Loader2 className="w-6 h-6 text-white animate-spin" />
-                  </div>
-                )}
-                <button
-                  onClick={handlePickFile}
-                  disabled={uploading}
-                  className="absolute bottom-0 right-0 w-9 h-9 rounded-full bg-primary text-primary-foreground border-2 border-card flex items-center justify-center shadow hover:opacity-90 disabled:opacity-50"
-                  title="Change photo"
-                >
-                  <Camera className="w-4 h-4" />
-                </button>
-                <input
-                  ref={fileInput}
-                  type="file"
-                  accept="image/*"
-                  className="hidden"
-                  onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    if (f) void handleUpload(f);
-                  }}
-                />
-              </div>
-
-              <div className="flex-1 text-center sm:text-left">
-                <h2 className="text-lg sm:text-xl font-semibold">
-                  {form.fullName || profile.fullName}
-                </h2>
-                <p className="text-sm text-muted-foreground break-all">
-                  {profile.email}
-                </p>
-                <div className="flex flex-wrap gap-2 mt-3 justify-center sm:justify-start">
-                  <span className="text-xs px-2 py-0.5 rounded-full border bg-purple-100 text-purple-700 border-purple-200 font-medium">
-                    {ROLE_LABEL[profile.role] ?? profile.role}
-                  </span>
-                  <span className="text-xs px-2 py-0.5 rounded-full border bg-emerald-100 text-emerald-700 border-emerald-200 font-medium capitalize">
-                    {profile.status}
-                  </span>
-                </div>
-                <p className="text-xs text-muted-foreground mt-3">
-                  Tap the camera to change your picture. Images are auto-resized
-                  for fast upload.
-                </p>
-              </div>
-
-              <div className="w-full sm:w-auto">
-                <Link
-                  href="/change-password"
-                  className="inline-flex items-center justify-center gap-2 w-full sm:w-auto border border-border rounded-md px-3 py-2 text-sm hover:bg-muted/40"
-                >
-                  <KeyRound className="w-3.5 h-3.5" />
-                  Change password
-                </Link>
-              </div>
+      <PageHeader
+        title="My profile"
+        subtitle={
+          isAdmin
+            ? "View and update your personal details."
+            : "View your personal details. Contact an administrator to make changes."
+        }
+      />
+      <div className="max-w-2xl space-y-6">
+        {/* Avatar section */}
+        <Card>
+          <div className="flex items-center gap-5">
+            <Avatar
+              fullName={profile?.fullName}
+              photoURL={profile?.photoURL}
+              size={80}
+            />
+            <div>
+              <h2 className="font-semibold text-primary mb-1">
+                {profile?.fullName}
+              </h2>
+              <p className="text-xs text-muted-foreground mb-2 capitalize">
+                {profile?.role}
+              </p>
+              <Button
+                variant="outline"
+                onClick={() => avatarRef.current?.click()}
+                disabled={busy}
+              >
+                Upload photo
+              </Button>
+              <input
+                ref={avatarRef}
+                type="file"
+                accept="image/*"
+                onChange={onAvatar}
+                className="hidden"
+              />
             </div>
-          </section>
+          </div>
+        </Card>
 
-          {/* Personal details */}
-          <section className="bg-card rounded-lg shadow p-4 sm:p-6">
-            <h3 className="text-base font-semibold mb-4">Personal details</h3>
-            <div className="grid sm:grid-cols-2 gap-4">
-              <Field
+        {/* Profile fields */}
+        <Card>
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="font-semibold text-primary">Personal details</h2>
+            {isAdmin && !editing && (
+              <Button variant="outline" onClick={() => setEditing(true)}>
+                Edit
+              </Button>
+            )}
+          </div>
+
+          <Alert tone="error">{err}</Alert>
+          <Alert tone="success">{ok}</Alert>
+
+          {isAdmin && editing ? (
+            <div className="space-y-3 text-sm">
+              <Input
                 label="Full name"
                 value={form.fullName}
-                onChange={(v) => setForm({ ...form, fullName: v })}
+                onChange={setField("fullName")}
               />
               <div>
                 <label className="block text-sm font-medium mb-1">Email</label>
-                <div className="flex gap-2">
-                  <input
-                    value={profile.email}
-                    readOnly
-                    disabled
-                    className="flex-1 px-3 py-2 rounded-md border border-border bg-muted/40 text-muted-foreground truncate"
+                <div className="text-foreground">
+                  {profile?.email || (
+                    <span className="text-muted-foreground">—</span>
+                  )}
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Email cannot be changed here.
+                </p>
+              </div>
+              <Input
+                label="Phone"
+                value={form.phone}
+                onChange={setField("phone")}
+              />
+              <Textarea
+                label="Address"
+                value={form.address}
+                onChange={setField("address")}
+                rows={2}
+              />
+              <Textarea
+                label="Bio"
+                value={form.bio}
+                onChange={setField("bio")}
+                rows={3}
+              />
+              <div className="grid grid-cols-2 gap-4">
+                <Input
+                  label="Date of birth"
+                  type="date"
+                  value={form.dateOfBirth}
+                  onChange={setField("dateOfBirth")}
+                />
+                <Input
+                  label="National ID"
+                  value={form.nationalId}
+                  onChange={setField("nationalId")}
+                />
+              </div>
+              <div className="pt-2">
+                <div className="text-xs uppercase tracking-wide text-muted-foreground mb-2">
+                  Emergency contact
+                </div>
+                <div className="grid sm:grid-cols-3 gap-3">
+                  <Input
+                    label="Name"
+                    value={form.emergencyName}
+                    onChange={setField("emergencyName")}
                   />
-                  <button
-                    type="button"
-                    onClick={openEmailDialog}
-                    className="border border-border rounded-md px-3 hover:bg-muted/40"
-                    title="Change email"
-                  >
-                    <Pencil className="w-4 h-4" />
-                  </button>
+                  <Input
+                    label="Relationship"
+                    value={form.emergencyRelationship}
+                    onChange={setField("emergencyRelationship")}
+                  />
+                  <Input
+                    label="Phone"
+                    value={form.emergencyPhone}
+                    onChange={setField("emergencyPhone")}
+                  />
                 </div>
               </div>
-              <Field
-                label="Phone"
-                type="tel"
-                inputMode="tel"
-                placeholder="+254 700 000 000"
-                value={form.phone}
-                onChange={(v) => setForm({ ...form, phone: v })}
-              />
-              <Field
-                label="Date of birth"
-                type="date"
-                value={form.dateOfBirth}
-                onChange={(v) => setForm({ ...form, dateOfBirth: v })}
-              />
-              <div className="sm:col-span-2">
-                <Field
-                  label="Address"
-                  placeholder="Street, city, country"
-                  value={form.address}
-                  onChange={(v) => setForm({ ...form, address: v })}
-                />
-              </div>
-              <div className="sm:col-span-2">
-                <Field
-                  label="National ID / Passport"
-                  value={form.nationalId}
-                  onChange={(v) => setForm({ ...form, nationalId: v })}
-                />
-              </div>
-              <div className="sm:col-span-2">
-                <label className="block text-sm font-medium mb-1">
-                  About me
-                </label>
-                <textarea
-                  rows={3}
-                  value={form.bio}
-                  onChange={(e) => setForm({ ...form, bio: e.target.value })}
-                  placeholder="A short introduction"
-                  className="w-full px-3 py-2 rounded-md border border-border bg-card focus:ring-2 focus:ring-primary outline-none resize-none"
-                />
+
+              <div className="flex gap-2 pt-3">
+                <Button onClick={onSave} disabled={saving}>
+                  {saving ? "Saving…" : "Save changes"}
+                </Button>
+                <Button variant="outline" onClick={onCancel} disabled={saving}>
+                  Cancel
+                </Button>
               </div>
             </div>
-          </section>
-
-          {/* Emergency contact */}
-          <section className="bg-card rounded-lg shadow p-4 sm:p-6">
-            <h3 className="text-base font-semibold mb-4">Emergency contact</h3>
-            <div className="grid sm:grid-cols-3 gap-4">
-              <Field
-                label="Name"
-                value={form.emergencyName}
-                onChange={(v) => setForm({ ...form, emergencyName: v })}
-              />
-              <Field
-                label="Relationship"
-                placeholder="Spouse, parent, sibling…"
-                value={form.emergencyRelationship}
-                onChange={(v) => setForm({ ...form, emergencyRelationship: v })}
-              />
-              <Field
-                label="Phone"
-                type="tel"
-                inputMode="tel"
-                value={form.emergencyPhone}
-                onChange={(v) => setForm({ ...form, emergencyPhone: v })}
-              />
-            </div>
-          </section>
-
-          {/* Employee contracts */}
-          {isEmployee && (
-            <section className="bg-card rounded-lg shadow p-4 sm:p-6">
-              <h3 className="text-base font-semibold mb-4">My contracts</h3>
-              {contractsLoading ? (
-                <p className="text-sm text-muted-foreground">Loading…</p>
-              ) : contracts.length === 0 ? (
-                <p className="text-sm text-muted-foreground">
-                  You do not have any contracts on file yet.
+          ) : (
+            <>
+              <div className="space-y-3 text-sm">
+                <Field label="Full name" value={profile?.fullName} />
+                <Field label="Email" value={profile?.email} />
+                <Field label="Phone" value={profile?.phone} />
+                <Field label="Address" value={profile?.address} multiline />
+                <Field label="Bio" value={profile?.bio} multiline />
+                <div className="grid grid-cols-2 gap-4">
+                  <Field
+                    label="Date of birth"
+                    value={
+                      profile?.dateOfBirth
+                        ? formatDate(profile.dateOfBirth)
+                        : ""
+                    }
+                  />
+                  <Field label="National ID" value={profile?.nationalId} />
+                </div>
+                <Field
+                  label="Emergency contact"
+                  value={formatEmergencyContact(profile?.emergencyContact)}
+                />
+              </div>
+              {!isAdmin && (
+                <p className="mt-4 text-xs text-muted-foreground">
+                  To update any of these details, please contact an
+                  administrator.
                 </p>
-              ) : (
-                <ul className="divide-y divide-border">
-                  {contracts.map((c) => (
-                    <li
-                      key={c.id}
-                      className="py-3 flex items-center justify-between text-sm"
-                    >
-                      <div>
-                        <div className="font-medium">
-                          {c.employerName || "Employer"}
-                        </div>
-                        <div className="text-xs text-muted-foreground capitalize">
-                          {c.contractType || "contract"}
-                          {c.startDate ? ` · started ${c.startDate}` : ""}
-                        </div>
-                      </div>
-                      <span
-                        className={`text-xs px-2 py-0.5 rounded-full border font-medium ${
-                          c.active !== false
-                            ? "bg-emerald-100 text-emerald-700 border-emerald-200"
-                            : "bg-gray-200 text-gray-700 border-gray-300"
-                        }`}
-                      >
-                        {c.active !== false ? "Active" : "Inactive"}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
               )}
-            </section>
+            </>
           )}
+        </Card>
 
-          <div className="flex justify-end pb-4">
-            <button
-              onClick={handleSave}
-              disabled={saving}
-              className="inline-flex items-center bg-primary text-primary-foreground px-4 py-2 rounded-md font-medium hover:opacity-90 disabled:opacity-50"
-            >
-              {saving ? (
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-              ) : (
-                <Save className="w-4 h-4 mr-2" />
-              )}
-              {saving ? "Saving…" : "Save changes"}
-            </button>
-          </div>
-        </div>
+        {/* Employee contracts */}
+        {profile?.role === ROLES.EMPLOYEE && contracts.length > 0 && (
+          <Card>
+            <h2 className="font-semibold text-primary mb-3">My contracts</h2>
+            <ul className="divide-y divide-border">
+              {contracts.map((c) => (
+                <li key={c.id} className="py-2 text-sm">
+                  <span className="font-medium">
+                    {c.employerName || "Employer"}
+                  </span>
+                  <span className="text-muted-foreground ml-2">
+                    {c.type} · {formatDate(c.startDate)}
+                    {c.endDate ? ` → ${formatDate(c.endDate)}` : ""}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </Card>
+        )}
+
+        {/* Employer subscription card */}
+        {profile?.role === ROLES.EMPLOYER && (
+          <Card>
+            <h2 className="font-semibold text-primary mb-3">Subscription</h2>
+            <div className="grid grid-cols-2 gap-4 text-sm">
+              <Field label="Tier" value={profile?.tier || "Free"} />
+              <Field
+                label="Status"
+                value={
+                  SUBSCRIPTION_STATUS_LABELS[profile?.subscriptionStatus] ||
+                  profile?.subscriptionStatus ||
+                  "—"
+                }
+              />
+            </div>
+            <p className="mt-3 text-xs text-muted-foreground">
+              Subscription tier and status are managed by an administrator.
+            </p>
+          </Card>
+        )}
       </div>
-
-      {/* Change-email modal */}
-      {emailDialogOpen && (
-        <div
-          className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4"
-          onClick={() => !changingEmail && setEmailDialogOpen(false)}
-        >
-          <div
-            className="bg-card rounded-lg shadow-xl w-full max-w-md p-5"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-start justify-between mb-3">
-              <div>
-                <h2 className="text-base font-semibold flex items-center gap-2">
-                  <Mail className="w-4 h-4" /> Change email
-                </h2>
-                <p className="text-xs text-muted-foreground mt-1">
-                  Confirm your current password before updating your email.
-                </p>
-              </div>
-              <button
-                onClick={() => setEmailDialogOpen(false)}
-                disabled={changingEmail}
-                className="text-muted-foreground hover:text-foreground"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            {emailMsg && (
-              <div className="mb-3 p-3 rounded-md border border-green-300 bg-green-50 text-green-700 text-xs">
-                {emailMsg}
-              </div>
-            )}
-            {emailErr && (
-              <div className="mb-3 p-3 rounded-md border border-destructive/40 bg-destructive/10 text-destructive text-xs">
-                {emailErr}
-              </div>
-            )}
-
-            <div className="space-y-3">
-              <div>
-                <label className="block text-sm font-medium mb-1">
-                  New email
-                </label>
-                <input
-                  type="email"
-                  value={emailForm.newEmail}
-                  onChange={(e) =>
-                    setEmailForm({ ...emailForm, newEmail: e.target.value })
-                  }
-                  className="w-full px-3 py-2 rounded-md border border-border bg-card focus:ring-2 focus:ring-primary outline-none"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-1">
-                  Current password
-                </label>
-                <input
-                  type="password"
-                  value={emailForm.currentPassword}
-                  onChange={(e) =>
-                    setEmailForm({
-                      ...emailForm,
-                      currentPassword: e.target.value,
-                    })
-                  }
-                  className="w-full px-3 py-2 rounded-md border border-border bg-card focus:ring-2 focus:ring-primary outline-none"
-                />
-              </div>
-            </div>
-
-            <div className="flex justify-end gap-2 mt-5">
-              <button
-                onClick={() => setEmailDialogOpen(false)}
-                disabled={changingEmail}
-                className="border border-border rounded-md px-3 py-2 text-sm hover:bg-muted/40"
-              >
-                Close
-              </button>
-              <button
-                onClick={handleChangeEmail}
-                disabled={changingEmail}
-                className="inline-flex items-center bg-primary text-primary-foreground px-3 py-2 rounded-md text-sm font-medium hover:opacity-90 disabled:opacity-50"
-              >
-                {changingEmail && (
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                )}
-                {changingEmail ? "Sending…" : "Send verification"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </Layout>
   );
 }
 
-function Field({
-  label,
-  value,
-  onChange,
-  type = "text",
-  placeholder,
-  inputMode,
-}) {
+// Read-only field row.
+function Field({ label, value, multiline }) {
   return (
     <div>
-      <label className="block text-sm font-medium mb-1">{label}</label>
-      <input
-        type={type}
-        value={value}
-        inputMode={inputMode}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        className="w-full px-3 py-2 rounded-md border border-border bg-card focus:ring-2 focus:ring-primary outline-none"
-      />
+      <div className="text-xs uppercase tracking-wide text-muted-foreground mb-0.5">
+        {label}
+      </div>
+      <div
+        className={`text-foreground ${multiline ? "whitespace-pre-wrap" : ""}`}
+      >
+        {renderFieldValue(value)}
+      </div>
     </div>
   );
+}
+
+// Defensive value renderer: never let an object/array crash the page.
+function renderFieldValue(v) {
+  if (v === null || v === undefined || v === "") {
+    return <span className="text-muted-foreground">—</span>;
+  }
+  if (
+    typeof v === "string" ||
+    typeof v === "number" ||
+    typeof v === "boolean"
+  ) {
+    return String(v);
+  }
+  if (Array.isArray(v)) return v.map(renderScalar).filter(Boolean).join(", ");
+  if (typeof v === "object") {
+    const parts = Object.entries(v)
+      .filter(([, val]) => val !== null && val !== undefined && val !== "")
+      .map(([k, val]) => `${k}: ${renderScalar(val)}`);
+    return parts.length ? (
+      parts.join(" · ")
+    ) : (
+      <span className="text-muted-foreground">—</span>
+    );
+  }
+  return String(v);
+}
+
+function renderScalar(v) {
+  if (v === null || v === undefined) return "";
+  if (typeof v === "object") return JSON.stringify(v);
+  return String(v);
+}
+
+// Format emergency contact: it may be a plain string (legacy) or an
+// object { name, relationship, phone }. Returns a printable string or "".
+function formatEmergencyContact(v) {
+  if (!v) return "";
+  if (typeof v === "string") return v;
+  if (typeof v === "object") {
+    const { name, relationship, phone } = v;
+    const parts = [];
+    if (name) parts.push(name);
+    if (relationship) parts.push(`(${relationship})`);
+    if (phone) parts.push(`— ${phone}`);
+    return parts.join(" ").trim();
+  }
+  return String(v);
 }

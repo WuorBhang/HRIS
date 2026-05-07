@@ -1,29 +1,31 @@
-function getInitials(name) {
-  if (!name) return "?";
-  const parts = name.trim().split(/\s+/);
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
-}
+// Initials-based avatar with deterministic color.
+import { useEffect, useState } from "react";
 
-// Deterministic background color from the name so the same person always
-// gets the same avatar tint when we have to fall back to initials.
-function colorFromName(name) {
-  const palette = [
-    "bg-rose-500",
-    "bg-orange-500",
-    "bg-amber-500",
-    "bg-emerald-500",
-    "bg-teal-500",
-    "bg-sky-500",
-    "bg-indigo-500",
-    "bg-fuchsia-500",
-  ];
-  if (!name) return palette[0];
-  let hash = 0;
-  for (let i = 0; i < name.length; i++)
-    hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
-  return palette[hash % palette.length];
-}
+const PALETTE = [
+  "bg-rose-500",
+  "bg-orange-500",
+  "bg-amber-500",
+  "bg-emerald-500",
+  "bg-teal-500",
+  "bg-sky-500",
+  "bg-indigo-500",
+  "bg-fuchsia-500",
+];
+const initials = (n) =>
+  !n
+    ? "?"
+    : n
+        .trim()
+        .split(/\s+/)
+        .map((p) => p[0])
+        .slice(0, 2)
+        .join("")
+        .toUpperCase();
+const color = (n) => {
+  let h = 0;
+  for (const c of n || "") h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return PALETTE[h % PALETTE.length];
+};
 
 export default function Avatar({
   fullName,
@@ -31,29 +33,28 @@ export default function Avatar({
   size = 40,
   className = "",
 }) {
-  const dimension = {
-    width: size,
-    height: size,
-    fontSize: Math.round(size / 2.6),
-  };
+  const dim = { width: size, height: size, fontSize: Math.round(size / 2.6) };
+  // Reset failed-state whenever the URL changes so a fresh upload re-tries.
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    setFailed(false);
+  }, [photoURL]);
 
-  if (photoURL) {
-    return (
-      <img
-        src={photoURL}
-        alt={fullName || "User"}
-        style={dimension}
-        className={`rounded-full object-cover border border-border ${className}`}
-      />
-    );
-  }
-
-  return (
+  const showImage = photoURL && !failed;
+  return showImage ? (
+    <img
+      src={photoURL}
+      alt={fullName}
+      style={dim}
+      onError={() => setFailed(true)}
+      className={`rounded-full object-cover border border-border ${className}`}
+    />
+  ) : (
     <div
-      style={dimension}
-      className={`rounded-full text-white font-semibold flex items-center justify-center select-none ${colorFromName(fullName)} ${className}`}
+      style={dim}
+      className={`rounded-full text-white font-semibold flex items-center justify-center select-none ${color(fullName)} ${className}`}
     >
-      {getInitials(fullName)}
+      {initials(fullName)}
     </div>
   );
 }

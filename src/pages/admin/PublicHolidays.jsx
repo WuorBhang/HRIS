@@ -1,10 +1,12 @@
+// Public holidays calendar (read-only — auto-seeded by Cloud Function).
 import { useEffect, useMemo, useState } from "react";
-import { ChevronLeft, ChevronRight, CalendarDays } from "lucide-react";
-import Layout from "../../components/Layout";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import { subscribeHolidays } from "../../lib/holidayService";
+import { Card, PageHeader } from "../../lib/ui";
+import Layout from "../../components/Layout";
 
-const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-const MONTH_NAMES = [
+const DAY = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const MONTHS = [
   "January",
   "February",
   "March",
@@ -19,293 +21,162 @@ const MONTH_NAMES = [
   "December",
 ];
 
-export default function AdminPublicHolidays() {
-  const [holidays, setHolidays] = useState([]);
-  const [loading, setLoading] = useState(true);
+// Build 6-week grid (Mon-first).
+const buildGrid = (year, month) => {
+  const first = new Date(year, month, 1);
+  const offset = (first.getDay() + 6) % 7;
+  const start = new Date(year, month, 1 - offset);
+  return Array.from(
+    { length: 42 },
+    (_, i) => new Date(start.getTime() + i * 86400000),
+  );
+};
 
-  // Default the calendar to *today's* month/year so it always opens on
-  // whatever year is current — no manual roll-over needed each January.
-  const today = useMemo(() => {
-    const t = new Date();
-    t.setHours(0, 0, 0, 0);
-    return t;
-  }, []);
-  const [viewYear, setViewYear] = useState(today.getFullYear());
-  const [viewMonth, setViewMonth] = useState(today.getMonth());
+export default function PublicHolidays() {
+  const today = new Date();
+  const [year, setYear] = useState(today.getFullYear());
+  const [month, setMonth] = useState(today.getMonth());
+  const [items, setItems] = useState([]);
 
-  useEffect(() => {
-    const unsub = subscribeHolidays((list) => {
-      setHolidays(list);
-      setLoading(false);
-    });
-    return () => unsub();
-  }, []);
+  useEffect(() => subscribeHolidays((all) => setItems(all)), []);
 
-  // Map: "YYYY-MM-DD" -> holiday object, for O(1) lookup while rendering days.
-  const byDate = useMemo(() => {
-    const m = {};
-    for (const h of holidays) m[h.date] = h;
-    return m;
-  }, [holidays]);
+  const byKey = useMemo(
+    () => Object.fromEntries(items.map((h) => [h.date, h])),
+    [items],
+  );
+  const yearsAvail = useMemo(
+    () =>
+      [...new Set(items.map((h) => Number(h.date.slice(0, 4))))].sort(
+        (a, b) => b - a,
+      ),
+    [items],
+  );
+  const grid = useMemo(() => buildGrid(year, month), [year, month]);
 
-  const yearsAvailable = useMemo(() => {
-    const ys = new Set(holidays.map((h) => Number(h.date.slice(0, 4))));
-    ys.add(today.getFullYear());
-    return Array.from(ys).sort((a, b) => a - b);
-  }, [holidays, today]);
-
-  // Build the visible 6-week calendar grid, Monday-first.
-  const calendarDays = useMemo(() => {
-    const first = new Date(viewYear, viewMonth, 1);
-    // JS getDay(): 0=Sun..6=Sat. Convert to Mon-first (0=Mon..6=Sun).
-    const startOffset = (first.getDay() + 6) % 7;
-    const start = new Date(viewYear, viewMonth, 1 - startOffset);
-    return Array.from({ length: 42 }, (_, i) => {
-      const d = new Date(start);
-      d.setDate(start.getDate() + i);
-      return d;
-    });
-  }, [viewYear, viewMonth]);
-
-  const yearHolidays = useMemo(() => {
-    return holidays
-      .filter((h) => h.date.startsWith(String(viewYear)))
-      .sort((a, b) => a.date.localeCompare(b.date));
-  }, [holidays, viewYear]);
-
-  const nextHoliday = useMemo(() => {
-    const todayStr = today.toISOString().slice(0, 10);
-    return holidays
-      .filter((h) => h.date >= todayStr)
-      .sort((a, b) => a.date.localeCompare(b.date))[0];
-  }, [holidays, today]);
-
-  const goPrev = () => {
-    if (viewMonth === 0) {
-      setViewMonth(11);
-      setViewYear((y) => y - 1);
-    } else {
-      setViewMonth((m) => m - 1);
+  // Prev / next month.
+  const nav = (d) => {
+    let m = month + d,
+      y = year;
+    if (m < 0) {
+      m = 11;
+      y--;
+    } else if (m > 11) {
+      m = 0;
+      y++;
     }
-  };
-  const goNext = () => {
-    if (viewMonth === 11) {
-      setViewMonth(0);
-      setViewYear((y) => y + 1);
-    } else {
-      setViewMonth((m) => m + 1);
-    }
-  };
-  const goToday = () => {
-    setViewYear(today.getFullYear());
-    setViewMonth(today.getMonth());
+    setMonth(m);
+    setYear(y);
   };
 
-  const fmtDate = (d) =>
-    d.toLocaleDateString("en-GB", {
-      weekday: "long",
-      day: "2-digit",
-      month: "long",
-      year: "numeric",
-    });
+  const ymd = (d) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 
   return (
     <Layout>
-      <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-        <div>
-          <h1 className="text-2xl sm:text-3xl font-bold text-primary">
-            Public Holidays
-          </h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            Kenya public holiday calendar used across the platform.
-          </p>
-        </div>
-        {nextHoliday && (
-          <div className="bg-accent/10 border border-accent/30 text-primary rounded-md px-4 py-2 text-sm">
-            <div className="text-xs uppercase tracking-wide text-accent font-semibold">
-              Next holiday
+      <PageHeader
+        title="Public holidays"
+        subtitle="Kenya — auto-seeded yearly."
+      />
+      <div className="grid lg:grid-cols-[1fr_220px] gap-6">
+        <Card>
+          <div className="flex items-center justify-between mb-4">
+            <button
+              onClick={() => nav(-1)}
+              className="p-2 hover:bg-muted/30 rounded"
+            >
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+            <div className="font-semibold text-primary">
+              {MONTHS[month]} {year}
             </div>
-            <div className="font-medium">
-              {nextHoliday.name} —{" "}
-              {new Date(nextHoliday.date + "T00:00:00").toLocaleDateString(
-                "en-GB",
-                { day: "2-digit", month: "long", year: "numeric" },
-              )}
+            <button
+              onClick={() => nav(1)}
+              className="p-2 hover:bg-muted/30 rounded"
+            >
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+          <div className="grid grid-cols-7 text-xs text-center text-muted-foreground mb-1">
+            {DAY.map((d) => (
+              <div key={d} className="py-1">
+                {d}
+              </div>
+            ))}
+          </div>
+          <div className="grid grid-cols-7 gap-1">
+            {grid.map((d, i) => {
+              const inMonth = d.getMonth() === month;
+              const k = ymd(d);
+              const h = byKey[k];
+              const isToday = ymd(d) === ymd(today);
+              const style = isToday
+                ? {
+                    backgroundColor: "#1b4f72",
+                    borderColor: "#1b4f72",
+                    color: "#fff",
+                  }
+                : h
+                  ? {
+                      backgroundColor: "#f39c12",
+                      borderColor: "#f39c12",
+                      color: "#fff",
+                    }
+                  : undefined;
+              const baseBg = inMonth
+                ? "bg-card"
+                : "bg-muted/20 text-muted-foreground/50";
+              return (
+                <div
+                  key={i}
+                  style={style}
+                  className={`min-h-[64px] p-1 rounded border text-xs ${style ? "" : baseBg} ${style ? "" : "border-border"}`}
+                >
+                  <div className="font-medium">{d.getDate()}</div>
+                  {h && (
+                    <div
+                      className={`text-[10px] mt-0.5 truncate ${style ? "" : "text-primary"}`}
+                      title={h.name}
+                    >
+                      {h.name}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          <div className="mt-4 flex gap-4 text-xs">
+            <div className="flex items-center gap-2">
+              <span
+                className="inline-block w-3 h-3 rounded"
+                style={{ backgroundColor: "#1b4f72" }}
+              />
+              <span className="text-muted-foreground">Today</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span
+                className="inline-block w-3 h-3 rounded"
+                style={{ backgroundColor: "#f39c12" }}
+              />
+              <span className="text-muted-foreground">Public holiday</span>
             </div>
           </div>
-        )}
-      </div>
-
-      {loading ? (
-        <div className="bg-card rounded-lg shadow p-12 text-center text-sm text-muted-foreground">
-          Loading holiday calendar…
-        </div>
-      ) : (
-        <div className="grid lg:grid-cols-3 gap-4 sm:gap-6">
-          {/* Calendar */}
-          <section className="lg:col-span-2 bg-card rounded-lg shadow p-4 sm:p-6">
-            <div className="flex items-center justify-between mb-4 gap-2">
-              <button
-                onClick={goPrev}
-                className="p-2 rounded-md hover:bg-muted/40 text-muted-foreground"
-                aria-label="Previous month"
-              >
-                <ChevronLeft className="w-5 h-5" />
-              </button>
-              <div className="flex items-center gap-2">
-                <h2 className="text-base sm:text-lg font-semibold text-primary">
-                  {MONTH_NAMES[viewMonth]}
-                </h2>
-                <select
-                  value={viewYear}
-                  onChange={(e) => setViewYear(Number(e.target.value))}
-                  className="text-sm border border-border rounded-md px-2 py-1 bg-card outline-none focus:ring-2 focus:ring-primary"
-                >
-                  {yearsAvailable.map((y) => (
-                    <option key={y} value={y}>
-                      {y}
-                    </option>
-                  ))}
-                </select>
+        </Card>
+        <Card>
+          <h2 className="font-semibold text-primary mb-3">Years</h2>
+          <ul className="space-y-1">
+            {yearsAvail.map((y) => (
+              <li key={y}>
                 <button
-                  onClick={goToday}
-                  className="text-xs px-2 py-1 rounded border border-border text-muted-foreground hover:text-foreground hover:bg-muted/40"
+                  onClick={() => setYear(y)}
+                  className={`w-full text-left px-3 py-1.5 rounded text-sm ${y === year ? "bg-primary text-white" : "hover:bg-muted/30"}`}
                 >
-                  Today
+                  {y}
                 </button>
-              </div>
-              <button
-                onClick={goNext}
-                className="p-2 rounded-md hover:bg-muted/40 text-muted-foreground"
-                aria-label="Next month"
-              >
-                <ChevronRight className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="grid grid-cols-7 gap-1 text-xs font-medium text-muted-foreground mb-1">
-              {WEEKDAYS.map((w) => (
-                <div key={w} className="text-center py-1">
-                  {w}
-                </div>
-              ))}
-            </div>
-
-            <div className="grid grid-cols-7 gap-1">
-              {calendarDays.map((d, i) => {
-                const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-                const inMonth = d.getMonth() === viewMonth;
-                const isToday = d.getTime() === today.getTime();
-                const holiday = byDate[iso];
-                return (
-                  <div
-                    key={i}
-                    className={`min-h-[64px] sm:min-h-[80px] rounded-md border p-1.5 text-xs flex flex-col ${
-                      !inMonth
-                        ? "bg-muted/20 border-transparent text-muted-foreground/50"
-                        : holiday
-                          ? "bg-accent/10 border-accent/40"
-                          : "border-border"
-                    }`}
-                    title={holiday ? holiday.name : undefined}
-                  >
-                    <div
-                      className={`flex items-center justify-between mb-1 ${
-                        isToday ? "font-bold text-primary" : ""
-                      }`}
-                    >
-                      <span
-                        className={`${
-                          isToday
-                            ? "bg-primary text-primary-foreground w-5 h-5 rounded-full flex items-center justify-center text-[10px]"
-                            : ""
-                        }`}
-                      >
-                        {d.getDate()}
-                      </span>
-                    </div>
-                    {holiday && inMonth && (
-                      <div className="text-[10px] sm:text-[11px] text-accent font-semibold leading-tight line-clamp-2">
-                        {holiday.name}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-
-            <div className="flex items-center gap-4 mt-4 text-xs text-muted-foreground">
-              <div className="flex items-center gap-1.5">
-                <span className="inline-block w-3 h-3 rounded bg-accent/30 border border-accent/40" />
-                Public holiday
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span className="inline-block w-3 h-3 rounded bg-primary text-primary-foreground" />
-                Today
-              </div>
-            </div>
-          </section>
-
-          {/* Year list */}
-          <aside className="bg-card rounded-lg shadow p-4 sm:p-6">
-            <div className="flex items-center gap-2 mb-3">
-              <CalendarDays className="w-4 h-4 text-primary" />
-              <h2 className="text-base sm:text-lg font-semibold text-primary">
-                {viewYear} holidays
-              </h2>
-            </div>
-            {yearHolidays.length === 0 ? (
-              <p className="text-sm text-muted-foreground py-6 text-center">
-                No holidays recorded for {viewYear}.
-              </p>
-            ) : (
-              <ul className="divide-y divide-border max-h-[480px] overflow-y-auto">
-                {yearHolidays.map((h) => {
-                  const d = new Date(h.date + "T00:00:00");
-                  const isPast = h.date < today.toISOString().slice(0, 10);
-                  return (
-                    <li
-                      key={h.id}
-                      className="py-2.5 flex items-start gap-3 cursor-pointer hover:bg-muted/30 -mx-2 px-2 rounded"
-                      onClick={() => {
-                        setViewYear(d.getFullYear());
-                        setViewMonth(d.getMonth());
-                      }}
-                    >
-                      <div
-                        className={`text-center shrink-0 rounded-md px-2 py-1 w-12 ${
-                          isPast
-                            ? "bg-muted/40 text-muted-foreground"
-                            : "bg-accent/15 text-accent"
-                        }`}
-                      >
-                        <div className="text-[10px] uppercase font-semibold leading-none">
-                          {d.toLocaleDateString("en-GB", { month: "short" })}
-                        </div>
-                        <div className="text-base font-bold leading-tight">
-                          {d.getDate()}
-                        </div>
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <div
-                          className={`text-sm font-medium ${
-                            isPast ? "text-muted-foreground" : "text-foreground"
-                          }`}
-                        >
-                          {h.name}
-                        </div>
-                        <div className="text-xs text-muted-foreground">
-                          {fmtDate(d)}
-                        </div>
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </aside>
-        </div>
-      )}
+              </li>
+            ))}
+          </ul>
+        </Card>
+      </div>
     </Layout>
   );
 }

@@ -1,16 +1,15 @@
+// Constants & enums.
 export const ROLES = {
   ADMIN: "admin",
   EMPLOYER: "employer",
   EMPLOYEE: "employee",
 };
-
 export const STATUS = {
   PENDING: "pending_approval",
   APPROVED: "approved",
   ACTIVE: "active",
   DISABLED: "disabled",
 };
-
 export const COLLECTIONS = {
   USERS: "users",
   CONTRACTS: "contracts",
@@ -18,51 +17,41 @@ export const COLLECTIONS = {
   OVERTIME_RECORDS: "overtime_clock_records",
   LEAVE_REQUESTS: "leave_requests",
   DOCUMENTS: "documents",
-  MONTHLY_RECORDS: "monthly_records",
   ACTIVITY_LOGS: "activity_logs",
+  COUNTERS: "counters",
 };
 
-// Categories shown in the document upload dropdown. The values are the
-// machine-readable strings stored in Firestore; the labels are what the
-// user sees.
-export const DOCUMENT_CATEGORIES = [
-  { value: "contract", label: "Contract" },
-  { value: "payslip", label: "Payslip" },
-  { value: "id", label: "ID / Passport" },
-  { value: "policy", label: "Policy" },
-  { value: "other", label: "Other" },
-];
-
-// Top-level document "kinds" — re-exported here so UI files can import the
-// catalogue + their human-readable labels from a single place. The source
-// of truth for the values is `src/lib/documents.js`.
-export const DOCUMENT_TYPES = Object.freeze({
+export const DOCUMENT_TYPES = {
   PAYSLIP: "payslip",
   STATUTORY: "statutory",
-  PAYROLL_SUMMARY: "payroll_summary",
   CONTRACT: "contract",
-  ID: "id",
-  POLICY: "policy",
-  OTHER: "other",
-});
+};
+export const DOCUMENT_TYPE_LABELS = {
+  contract: "Contract",
+  payslip: "Payslip",
+  statutory: "Statutory",
+};
+// Document types that are filed per calendar month (require a YYYY-MM value).
+export const MONTHLY_TYPES = ["payslip", "statutory"];
 
-export const DOCUMENT_TYPE_LABELS = Object.freeze({
-  [DOCUMENT_TYPES.CONTRACT]: "Contract",
-  [DOCUMENT_TYPES.PAYSLIP]: "Payslip",
-  [DOCUMENT_TYPES.STATUTORY]: "Statutory filing",
-  [DOCUMENT_TYPES.PAYROLL_SUMMARY]: "Payroll summary",
-  [DOCUMENT_TYPES.ID]: "ID / Passport",
-  [DOCUMENT_TYPES.POLICY]: "Policy",
-  [DOCUMENT_TYPES.OTHER]: "Other",
-});
+// File size limits
+export const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024 * 1024; // 10 GB — bulk document uploads
+export const MAX_AVATAR_BYTES = 33 * 1024 * 1024; // 33 MB — profile pictures
 
-// 25 MB cap on uploaded documents. Anything bigger should go through the
-// admin team out-of-band.
-export const MAX_DOCUMENT_BYTES = 25 * 1024 * 1024;
+// Allowed MIME types per upload context
+export const ALLOWED_DOCUMENT_MIME_TYPES = ["application/pdf"];
+export const ALLOWED_AVATAR_MIME_TYPES = [
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/gif",
+];
 
-export const LEAVE_TYPES = ["Annual", "Sick", "Unpaid", "Compassionate"];
+// Human-readable accept strings (for <input accept="...">)
+export const DOCUMENT_INPUT_ACCEPT = ".pdf";
+export const AVATAR_INPUT_ACCEPT = "image/jpeg,image/png,image/webp,image/gif";
 
-// Contract types shown in the admin "New contract" modal.
+export const LEAVE_TYPES = ["Annual", "Sick", "Unpaid", "Paid"];
 export const CONTRACT_TYPES = [
   "Permanent",
   "Fixed-term",
@@ -71,13 +60,27 @@ export const CONTRACT_TYPES = [
   "Internship",
 ];
 
-// We always *fetch / detect* upcoming holidays this many days ahead so the
-// app knows about them in advance, but we only *show* them in the dashboard
-// widget when they fall within the display window.
-export const HOLIDAY_FETCH_WINDOW_DAYS = 10;
-export const HOLIDAY_DISPLAY_WINDOW_DAYS = 4;
+// Employer subscription tiers (admin-managed).
+export const EMPLOYER_TIERS = ["Free", "Basic", "Standard", "Premium"];
+export const DEFAULT_EMPLOYER_TIER = "Free";
 
-// Kept for backwards compatibility with anything still importing this name.
-export const UPCOMING_HOLIDAY_WINDOW_DAYS = HOLIDAY_DISPLAY_WINDOW_DAYS;
-
-export const TEMP_PASSWORD_TTL_MS = 60 * 1000;
+// Employer subscription status (admin-managed).
+export const SUBSCRIPTION_STATUS = {
+  TRIAL: "trial",
+  ACTIVE: "active",
+  PAST_DUE: "past_due",
+  CANCELLED: "cancelled",
+  EXPIRED: "expired",
+};
+export const SUBSCRIPTION_STATUS_OPTIONS = Object.values(SUBSCRIPTION_STATUS);
+export const SUBSCRIPTION_STATUS_LABELS = {
+  trial: "Trial",
+  active: "Active",
+  past_due: "Past due",
+  cancelled: "Cancelled",
+  expired: "Expired",
+};
+export const DEFAULT_SUBSCRIPTION_STATUS = SUBSCRIPTION_STATUS.TRIAL;
+export const HOLIDAY_FETCH_DAYS = 10;
+export const HOLIDAY_DISPLAY_DAYS = 4;
+export const TEMP_PASSWORD_TTL_MS = 60_000;

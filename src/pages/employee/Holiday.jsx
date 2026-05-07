@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+// Employee holiday-work submission.
+import { useEffect, useState } from "react";
 import {
   addDoc,
   collection,
@@ -7,228 +8,150 @@ import {
   serverTimestamp,
   where,
 } from "firebase/firestore";
-import { useLocation } from "wouter";
-import Layout from "../../components/Layout";
-import UpcomingHolidays from "../../components/UpcomingHolidays";
 import { useAuth } from "../../context/AuthContext";
 import { db } from "../../lib/firebase";
 import { COLLECTIONS } from "../../lib/constants";
 import { subscribeHolidays } from "../../lib/holidayService";
-import { AUDIT_ACTIONS, logAction } from "../../lib/audit";
+import { formatDate } from "../../lib/utils";
+import { AUDIT, logAction } from "../../lib/audit";
+import {
+  Input,
+  Textarea,
+  Select,
+  Button,
+  Alert,
+  Card,
+  PageHeader,
+} from "../../lib/ui";
+import Layout from "../../components/Layout";
+import MySubmissions from "../../components/MySubmissions";
+import UpcomingHolidays from "../../components/UpcomingHolidays";
 
-export default function ReportHoliday() {
+export default function Holiday() {
   const { user, profile } = useAuth();
-  const [, navigate] = useLocation();
-
+  const [contract, setContract] = useState(null);
   const [holidays, setHolidays] = useState([]);
-  const [employerId, setEmployerId] = useState(null);
-  const [loadingMeta, setLoadingMeta] = useState(true);
-
   const [holidayId, setHolidayId] = useState("");
-  const [hours, setHours] = useState("8");
+  const [hours, setHours] = useState("");
   const [notes, setNotes] = useState("");
-
-  const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-
-  // load holidays + the employee's employer id (from contracts)
-  useEffect(() => {
-    const unsub = subscribeHolidays((list) => setHolidays(list));
-    return () => unsub();
-  }, []);
+  const [err, setErr] = useState("");
+  const [ok, setOk] = useState("");
+  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      if (!user) return;
-      try {
-        const snap = await getDocs(
-          query(
-            collection(db, COLLECTIONS.CONTRACTS),
-            where("employeeId", "==", user.uid),
-          ),
-        );
-        if (cancelled) return;
-        const docs = snap.docs.map((d) => d.data());
-        docs.sort(
-          (a, b) =>
-            (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0),
-        );
-        setEmployerId(docs[0]?.employerId || null);
-      } catch (err) {
-        // eslint-disable-next-line no-console
-        console.error("[Holiday] could not look up contract:", err);
-      } finally {
-        if (!cancelled) setLoadingMeta(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+    if (!user) return;
+    getDocs(
+      query(
+        collection(db, COLLECTIONS.CONTRACTS),
+        where("employeeId", "==", user.uid),
+      ),
+    )
+      .then((s) => {
+        const docs = s.docs
+          .map((d) => ({ id: d.id, ...d.data() }))
+          .sort(
+            (a, b) =>
+              (b.createdAt?.toMillis?.() || 0) -
+              (a.createdAt?.toMillis?.() || 0),
+          );
+        setContract(docs[0] || null);
+      })
+      .catch(() => {});
   }, [user]);
 
-  const sortedHolidays = useMemo(() => {
-    // show all holidays from earliest to latest, mark past ones
-    return holidays
-      .map((h) => ({ ...h, dateObj: new Date(h.date + "T00:00:00") }))
-      .sort((a, b) => a.dateObj - b.dateObj);
-  }, [holidays]);
+  useEffect(() => subscribeHolidays(setHolidays), []);
 
-  const selected = sortedHolidays.find((h) => h.id === holidayId);
-
-  const handleSubmit = async (e) => {
+  // Submit holiday work.
+  const onSubmit = async (e) => {
     e.preventDefault();
-    setError("");
-    setSuccess("");
-
-    if (!selected) {
-      setError("Please pick a public holiday from the calendar.");
-      return;
-    }
-    const numHours = parseFloat(hours);
-    if (isNaN(numHours) || numHours <= 0 || numHours > 24) {
-      setError("Hours must be a number between 0 and 24.");
-      return;
-    }
-    if (!employerId) {
-      setError(
-        "You're not linked to an employer yet. Ask the admin to create a contract for you first.",
-      );
-      return;
-    }
-
-    setSubmitting(true);
+    setErr("");
+    setOk("");
+    const h = holidays.find((x) => x.id === holidayId);
+    if (!contract) return setErr("No contract linked.");
+    if (!h) return setErr("Pick a public holiday.");
+    const hr = Number(hours);
+    if (!hr || hr <= 0 || hr > 24) return setErr("Hours must be 0–24.");
+    setBusy(true);
     try {
       const ref = await addDoc(collection(db, COLLECTIONS.OVERTIME_RECORDS), {
+        contractId: contract.id,
         employeeId: user.uid,
-        employerId,
-        date: selected.date,
-        hours: numHours,
+        employeeName: profile.fullName,
+        employerId: contract.employerId,
+        employerName: contract.employerName,
+        date: h.date,
+        hours: hr,
         notes: notes.trim(),
         isHoliday: true,
-        holidayName: selected.name,
+        holidayName: h.name,
         status: "pending",
         createdAt: serverTimestamp(),
       });
-      logAction(AUDIT_ACTIONS.HOLIDAY_WORK_SUBMITTED, user.uid, profile?.role, {
-        overtimeRecordId: ref.id,
-        type: "holiday_work",
-        date: selected.date,
-        hours: numHours,
-        holidayName: selected.name,
-        employerId,
+      logAction(AUDIT.HOLIDAY_WORK_SUBMITTED, user.uid, profile?.role, {
+        entryId: ref.id,
+        holiday: h.name,
+        hours: hr,
       });
-      setSuccess(
-        `Submitted ${numHours}h for ${selected.name} (${selected.date}). Awaiting employer approval.`,
-      );
+      setOk("Holiday work submitted.");
       setHolidayId("");
-      setHours("8");
+      setHours("");
       setNotes("");
-    } catch (err) {
-      setError(err.message || "Could not submit report.");
+    } catch (e2) {
+      setErr(e2.message);
     } finally {
-      setSubmitting(false);
+      setBusy(false);
     }
   };
 
   return (
     <Layout>
-      <div className="flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-2 mb-6">
-        <h1 className="text-xl sm:text-2xl font-bold text-primary">
-          Report holiday work
-        </h1>
-        <button
-          onClick={() => navigate("/employee/dashboard")}
-          className="text-sm text-primary underline self-start sm:self-auto"
-        >
-          ← Back to dashboard
-        </button>
-      </div>
-
-      <UpcomingHolidays />
-
-      <div className="bg-card rounded-lg shadow p-4 sm:p-6 max-w-2xl">
-        {loadingMeta ? (
-          <div className="text-muted-foreground text-sm">Loading…</div>
-        ) : (
-          <>
-            {error && (
-              <div className="mb-4 p-3 rounded-md border border-destructive/40 bg-destructive/10 text-destructive text-sm">
-                {error}
-              </div>
-            )}
-            {success && (
-              <div className="mb-4 p-3 rounded-md border border-green-300 bg-green-50 text-green-700 text-sm">
-                {success}
-              </div>
-            )}
-
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium mb-1">
-                  Public holiday date
-                </label>
-                <select
-                  value={holidayId}
-                  onChange={(e) => setHolidayId(e.target.value)}
-                  required
-                  className="w-full px-3 py-2 rounded-md border border-border bg-card outline-none focus:ring-2 focus:ring-primary"
-                >
-                  <option value="">— Select a Kenya public holiday —</option>
-                  {sortedHolidays.map((h) => (
-                    <option key={h.id} value={h.id}>
-                      {h.dateObj.toLocaleDateString("en-GB", {
-                        day: "2-digit",
-                        month: "short",
-                        year: "numeric",
-                      })}{" "}
-                      — {h.name}
-                    </option>
-                  ))}
-                </select>
-                <p className="text-xs text-muted-foreground mt-1">
-                  Only Kenya public holidays from the calendar can be selected.
-                </p>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium mb-1">
-                  Hours worked
-                </label>
-                <input
-                  type="number"
-                  step="0.5"
-                  min="0.5"
-                  max="24"
-                  value={hours}
-                  onChange={(e) => setHours(e.target.value)}
-                  required
-                  className="w-full px-3 py-2 rounded-md border border-border bg-card outline-none focus:ring-2 focus:ring-primary"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium mb-1">Notes</label>
-                <textarea
-                  value={notes}
-                  onChange={(e) => setNotes(e.target.value)}
-                  rows={3}
-                  placeholder="What did you work on?"
-                  className="w-full px-3 py-2 rounded-md border border-border bg-card outline-none focus:ring-2 focus:ring-primary"
-                />
-              </div>
-
-              <button
-                type="submit"
-                disabled={submitting}
-                className="bg-primary text-primary-foreground px-5 py-2 rounded-md font-medium hover:opacity-90 disabled:opacity-50"
+      <PageHeader
+        title="Holiday work"
+        subtitle="Submit hours worked on a public holiday."
+      />
+      <div className="grid lg:grid-cols-3 gap-6">
+        <div className="lg:col-span-2 space-y-6">
+          <Card>
+            <Alert tone="error">{err}</Alert>
+            <Alert tone="success">{ok}</Alert>
+            <form onSubmit={onSubmit} className="space-y-4">
+              <Select
+                label="Public holiday"
+                value={holidayId}
+                onChange={setHolidayId}
+                required
               >
-                {submitting ? "Submitting…" : "Submit holiday report"}
-              </button>
+                <option value="">Pick a holiday…</option>
+                {holidays.map((h) => (
+                  <option key={h.id} value={h.id}>
+                    {formatDate(h.date)} — {h.name}
+                  </option>
+                ))}
+              </Select>
+              <Input
+                label="Hours"
+                type="number"
+                step="0.5"
+                min="0.5"
+                max="24"
+                value={hours}
+                onChange={setHours}
+                required
+              />
+              <Textarea
+                label="Notes"
+                value={notes}
+                onChange={setNotes}
+                rows={3}
+              />
+              <Button type="submit" disabled={busy}>
+                {busy ? "Submitting…" : "Submit"}
+              </Button>
             </form>
-          </>
-        )}
+          </Card>
+          <MySubmissions mode="holiday" />
+        </div>
+        <UpcomingHolidays />
       </div>
     </Layout>
   );

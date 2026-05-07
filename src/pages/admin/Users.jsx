@@ -1,7 +1,7 @@
+// Admin user management: create / approve / disable / re-enable.
 import { useEffect, useMemo, useState } from "react";
 import {
   collection,
-  deleteField,
   doc,
   onSnapshot,
   orderBy,
@@ -14,56 +14,129 @@ import {
   createUserWithEmailAndPassword,
   signOut as fbSignOut,
 } from "firebase/auth";
-import Layout from "../../components/Layout";
+import { Copy, UserPlus, Pencil } from "lucide-react";
+import { useAuth } from "../../context/AuthContext";
 import { db, getSecondaryAuth } from "../../lib/firebase";
 import {
   COLLECTIONS,
   ROLES,
   STATUS,
   TEMP_PASSWORD_TTL_MS,
+  EMPLOYER_TIERS,
+  DEFAULT_EMPLOYER_TIER,
+  SUBSCRIPTION_STATUS_OPTIONS,
+  SUBSCRIPTION_STATUS_LABELS,
+  DEFAULT_SUBSCRIPTION_STATUS,
 } from "../../lib/constants";
 import { generateTempPassword, statusLabel } from "../../lib/utils";
-import { useAuth } from "../../context/AuthContext";
-import { AUDIT_ACTIONS, logAction } from "../../lib/audit";
+import { AUDIT, logAction } from "../../lib/audit";
+import {
+  Input,
+  Textarea,
+  Select,
+  Button,
+  Alert,
+  Card,
+  PageHeader,
+  Modal,
+} from "../../lib/ui";
+import Layout from "../../components/Layout";
+import Avatar from "../../components/Avatar";
 
-export default function AdminUsers() {
-  const { user: adminUser, profile: adminProfile } = useAuth();
+// Status badge.
+const Pill = ({ s }) => {
+  const cls =
+    s === STATUS.ACTIVE || s === STATUS.APPROVED
+      ? "bg-green-100 text-green-700"
+      : s === STATUS.DISABLED
+        ? "bg-red-100 text-red-700"
+        : "bg-amber-100 text-amber-700";
+  return (
+    <span className={`text-xs px-2 py-0.5 rounded-full ${cls}`}>
+      {statusLabel(s)}
+    </span>
+  );
+};
+
+// Subscription status badge (employers only).
+const SubBadge = ({ status }) => {
+  const s = status || DEFAULT_SUBSCRIPTION_STATUS;
+  const cls =
+    s === "active"
+      ? "bg-green-100 text-green-700"
+      : s === "trial"
+        ? "bg-blue-100 text-blue-700"
+        : s === "past_due"
+          ? "bg-amber-100 text-amber-700"
+          : "bg-red-100 text-red-700";
+  return (
+    <span
+      className={`text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded ${cls}`}
+    >
+      {SUBSCRIPTION_STATUS_LABELS[s] || s}
+    </span>
+  );
+};
+
+export default function Users() {
+  const { user, profile } = useAuth();
   const [users, setUsers] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [showCreate, setShowCreate] = useState(false);
+  const [modal, setModal] = useState(false);
+  const [f, setF] = useState({
+    email: "",
+    fullName: "",
+    phone: "",
+    address: "",
+    bio: "",
+    dateOfBirth: "",
+    nationalId: "",
+    emergencyContact: "",
+    role: ROLES.EMPLOYEE,
+    tier: DEFAULT_EMPLOYER_TIER,
+    subscriptionStatus: DEFAULT_SUBSCRIPTION_STATUS,
+  });
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [tempPw, setTempPw] = useState(null); // { email, password, expiresAt }
   const [now, setNow] = useState(Date.now());
 
-  useEffect(() => {
-    const unsub = onSnapshot(
-      query(collection(db, COLLECTIONS.USERS), orderBy("createdAt", "desc")),
-      (snap) => {
-        setUsers(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
-        setLoading(false);
-      },
-    );
-    return () => unsub();
-  }, []);
+  // Edit-details modal state.
+  const [editing, setEditing] = useState(null); // user object being edited, or null
+  const [ef, setEf] = useState({
+    fullName: "",
+    phone: "",
+    address: "",
+    bio: "",
+    dateOfBirth: "",
+    nationalId: "",
+    emergencyContact: "",
+    tier: DEFAULT_EMPLOYER_TIER,
+    subscriptionStatus: DEFAULT_SUBSCRIPTION_STATUS,
+  });
+  const [eErr, setEErr] = useState("");
+  const [eBusy, setEBusy] = useState(false);
 
-  // tick every second so countdowns update + auto-purge expired temp passwords
+  useEffect(
+    () =>
+      onSnapshot(
+        query(collection(db, COLLECTIONS.USERS), orderBy("createdAt", "desc")),
+        (s) => setUsers(s.docs.map((d) => ({ id: d.id, ...d.data() }))),
+        () => {},
+      ),
+    [],
+  );
+
+  // Tick countdown.
   useEffect(() => {
+    if (!tempPw) return;
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
-  }, []);
+  }, [tempPw]);
 
-  // Auto-clear expired temp passwords from Firestore
+  // Auto-clear temp password.
   useEffect(() => {
-    users.forEach((u) => {
-      if (u.tempPassword && u.tempPasswordCreatedAtMs) {
-        const elapsed = now - u.tempPasswordCreatedAtMs;
-        if (elapsed > TEMP_PASSWORD_TTL_MS) {
-          updateDoc(doc(db, COLLECTIONS.USERS, u.id), {
-            tempPassword: deleteField(),
-            tempPasswordCreatedAtMs: deleteField(),
-          }).catch(() => {});
-        }
-      }
-    });
-  }, [users, now]);
+    if (tempPw && now >= tempPw.expiresAt) setTempPw(null);
+  }, [tempPw, now]);
 
   const employers = useMemo(
     () => users.filter((u) => u.role === ROLES.EMPLOYER),
@@ -74,472 +147,465 @@ export default function AdminUsers() {
     [users],
   );
 
-  const approve = async (u) => {
+  // Create user via secondary auth.
+  const onCreate = async (e) => {
+    e.preventDefault();
+    setErr("");
+    // Required-field guard (all details mandatory).
+    const required = [
+      "email",
+      "fullName",
+      "phone",
+      "address",
+      "bio",
+      "dateOfBirth",
+      "nationalId",
+      "emergencyContact",
+    ];
+    for (const k of required) {
+      if (!String(f[k] || "").trim()) {
+        setErr("Please fill in all fields. Every detail is required.");
+        return;
+      }
+    }
+    setBusy(true);
+    try {
+      const password = generateTempPassword();
+      const sec = getSecondaryAuth();
+      const cred = await createUserWithEmailAndPassword(
+        sec,
+        f.email.trim(),
+        password,
+      );
+      const isEmployer = f.role === ROLES.EMPLOYER;
+      await setDoc(doc(db, COLLECTIONS.USERS, cred.user.uid), {
+        uid: cred.user.uid,
+        email: f.email.trim(),
+        fullName: f.fullName.trim(),
+        phone: f.phone.trim(),
+        address: f.address.trim(),
+        bio: f.bio.trim(),
+        dateOfBirth: f.dateOfBirth,
+        nationalId: f.nationalId.trim(),
+        emergencyContact: f.emergencyContact.trim(),
+        role: f.role,
+        // Employer-only fields (tier + subscription) — admin-managed.
+        ...(isEmployer
+          ? {
+              tier: f.tier || DEFAULT_EMPLOYER_TIER,
+              subscriptionStatus:
+                f.subscriptionStatus || DEFAULT_SUBSCRIPTION_STATUS,
+            }
+          : {}),
+        status: STATUS.PENDING,
+        mustChangePassword: true,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+        createdBy: user.uid,
+      });
+      await fbSignOut(sec);
+      logAction(AUDIT.ACCOUNT_CREATED, user.uid, profile?.role, {
+        email: f.email.trim(),
+        role: f.role,
+      });
+      setTempPw({
+        email: f.email.trim(),
+        password,
+        expiresAt: Date.now() + TEMP_PASSWORD_TTL_MS,
+      });
+      setF({
+        email: "",
+        fullName: "",
+        phone: "",
+        address: "",
+        bio: "",
+        dateOfBirth: "",
+        nationalId: "",
+        emergencyContact: "",
+        role: ROLES.EMPLOYEE,
+        tier: DEFAULT_EMPLOYER_TIER,
+        subscriptionStatus: DEFAULT_SUBSCRIPTION_STATUS,
+      });
+      setModal(false);
+    } catch (e2) {
+      setErr(e2.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Update status helper.
+  const setStatus = async (u, status, action) => {
     await updateDoc(doc(db, COLLECTIONS.USERS, u.id), {
-      status: STATUS.APPROVED,
-      approvedAt: serverTimestamp(),
+      status,
       updatedAt: serverTimestamp(),
     });
-    logAction(AUDIT_ACTIONS.USER_APPROVED, adminUser?.uid, adminProfile?.role, {
-      targetUserId: u.id,
-      targetEmail: u.email,
-      targetRole: u.role,
+    logAction(action, user.uid, profile?.role, {
+      targetUid: u.id,
+      email: u.email,
     });
   };
 
-  const toggleDisable = async (u) => {
-    const wasDisabled = u.status === STATUS.DISABLED;
-    await updateDoc(doc(db, COLLECTIONS.USERS, u.id), {
-      status: wasDisabled ? STATUS.APPROVED : STATUS.DISABLED,
-      updatedAt: serverTimestamp(),
+  // Open edit-details modal for a user.
+  const openEdit = (u) => {
+    setEditing(u);
+    setEf({
+      fullName: u.fullName || "",
+      phone: u.phone || "",
+      address: u.address || "",
+      bio: u.bio || "",
+      dateOfBirth: u.dateOfBirth || "",
+      nationalId: u.nationalId || "",
+      emergencyContact: u.emergencyContact || "",
+      tier: u.tier || DEFAULT_EMPLOYER_TIER,
+      subscriptionStatus: u.subscriptionStatus || DEFAULT_SUBSCRIPTION_STATUS,
     });
-    logAction(
-      wasDisabled ? AUDIT_ACTIONS.USER_REENABLED : AUDIT_ACTIONS.USER_DISABLED,
-      adminUser?.uid,
-      adminProfile?.role,
-      { targetUserId: u.id, targetEmail: u.email, targetRole: u.role },
-    );
+    setEErr("");
   };
+
+  // Save edited details.
+  const onSaveEdit = async (e) => {
+    e.preventDefault();
+    if (!editing) return;
+    setEBusy(true);
+    setEErr("");
+    try {
+      const isEmployer = editing.role === ROLES.EMPLOYER;
+      const payload = {
+        fullName: ef.fullName,
+        phone: ef.phone,
+        address: ef.address,
+        bio: ef.bio,
+        dateOfBirth: ef.dateOfBirth,
+        nationalId: ef.nationalId,
+        emergencyContact: ef.emergencyContact,
+        ...(isEmployer
+          ? {
+              tier: ef.tier || DEFAULT_EMPLOYER_TIER,
+              subscriptionStatus:
+                ef.subscriptionStatus || DEFAULT_SUBSCRIPTION_STATUS,
+            }
+          : {}),
+      };
+      await updateDoc(doc(db, COLLECTIONS.USERS, editing.id), {
+        ...payload,
+        updatedAt: serverTimestamp(),
+      });
+      logAction(AUDIT.PROFILE_UPDATED, user.uid, profile?.role, {
+        targetUid: editing.id,
+        email: editing.email,
+      });
+      setEditing(null);
+    } catch (e2) {
+      setEErr(e2.message);
+    } finally {
+      setEBusy(false);
+    }
+  };
+
+  // User row.
+  const Row = ({ u }) => (
+    <li className="py-3 flex items-center gap-3">
+      <Avatar fullName={u.fullName} photoURL={u.photoURL} size={36} />
+      <div className="flex-1 min-w-0">
+        <div className="font-medium truncate">{u.fullName}</div>
+        <div className="text-xs text-muted-foreground truncate">{u.email}</div>
+        {u.role === ROLES.EMPLOYER && (
+          <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+            <span className="text-[10px] uppercase tracking-wide bg-accent/15 text-accent px-1.5 py-0.5 rounded">
+              {u.tier || DEFAULT_EMPLOYER_TIER}
+            </span>
+            <SubBadge status={u.subscriptionStatus} />
+          </div>
+        )}
+      </div>
+      <Pill s={u.status} />
+      <div className="flex gap-2">
+        <Button variant="outline" onClick={() => openEdit(u)}>
+          <Pencil className="w-4 h-4 inline mr-1" /> Edit
+        </Button>
+        {u.status === STATUS.PENDING && (
+          <Button
+            onClick={() => setStatus(u, STATUS.APPROVED, AUDIT.USER_APPROVED)}
+          >
+            Approve
+          </Button>
+        )}
+        {u.status !== STATUS.DISABLED ? (
+          <Button
+            variant="danger"
+            onClick={() => setStatus(u, STATUS.DISABLED, AUDIT.USER_DISABLED)}
+          >
+            Disable
+          </Button>
+        ) : (
+          <Button
+            onClick={() => setStatus(u, STATUS.ACTIVE, AUDIT.USER_REENABLED)}
+          >
+            Re-enable
+          </Button>
+        )}
+      </div>
+    </li>
+  );
 
   return (
     <Layout>
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
-        <h1 className="text-xl sm:text-2xl font-bold text-primary">
-          User management
-        </h1>
-        <button
-          onClick={() => setShowCreate(true)}
-          className="bg-primary text-primary-foreground px-4 py-2 rounded-md font-medium hover:opacity-90 w-full sm:w-auto"
-        >
-          + Create user
-        </button>
-      </div>
-
-      {loading ? (
-        <div className="text-muted-foreground">Loading…</div>
-      ) : (
-        <>
-          <UserSection
-            title="Employers"
-            users={employers}
-            now={now}
-            onApprove={approve}
-            onToggleDisable={toggleDisable}
-          />
-          <UserSection
-            title="Employees"
-            users={employees}
-            now={now}
-            onApprove={approve}
-            onToggleDisable={toggleDisable}
-          />
-        </>
-      )}
-
-      {showCreate && (
-        <CreateUserModal
-          onClose={() => setShowCreate(false)}
-          adminUser={adminUser}
-          adminProfile={adminProfile}
-        />
-      )}
-    </Layout>
-  );
-}
-
-function UserSection({ title, users, now, onApprove, onToggleDisable }) {
-  return (
-    <section className="mb-8">
-      <h2 className="text-lg font-semibold text-primary mb-3">
-        {title}{" "}
-        <span className="text-muted-foreground text-sm">({users.length})</span>
-      </h2>
-      {users.length === 0 ? (
-        <div className="bg-card rounded-lg shadow p-5 text-sm text-muted-foreground">
-          No {title.toLowerCase()} yet.
-        </div>
-      ) : (
-        <>
-          {/* Desktop / tablet table */}
-          <div className="hidden md:block bg-card rounded-lg shadow overflow-x-auto">
-            <table className="w-full text-sm min-w-[640px]">
-              <thead className="bg-muted/40 text-left">
-                <tr>
-                  <th className="p-3">Name</th>
-                  <th className="p-3">Email</th>
-                  <th className="p-3">Phone</th>
-                  <th className="p-3">Status</th>
-                  <th className="p-3">Last login</th>
-                  <th className="p-3">Temp password</th>
-                  <th className="p-3 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {users.map((u) => (
-                  <UserRow
-                    key={u.id}
-                    user={u}
-                    now={now}
-                    onApprove={onApprove}
-                    onToggleDisable={onToggleDisable}
-                  />
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          {/* Mobile cards */}
-          <div className="md:hidden space-y-3">
-            {users.map((u) => (
-              <UserCard
-                key={u.id}
-                user={u}
-                now={now}
-                onApprove={onApprove}
-                onToggleDisable={onToggleDisable}
-              />
-            ))}
-          </div>
-        </>
-      )}
-    </section>
-  );
-}
-
-function UserRow({ user, now, onApprove, onToggleDisable }) {
-  const [copied, setCopied] = useState(false);
-
-  let tempBlock = <span className="text-muted-foreground">—</span>;
-  if (user.tempPassword && user.tempPasswordCreatedAtMs) {
-    const remaining = Math.max(
-      0,
-      Math.ceil(
-        (TEMP_PASSWORD_TTL_MS - (now - user.tempPasswordCreatedAtMs)) / 1000,
-      ),
-    );
-    if (remaining > 0) {
-      const credentials = `Email: ${user.email}\nPassword: ${user.tempPassword}`;
-      tempBlock = (
-        <div className="flex items-center gap-2">
-          <code className="bg-muted/40 px-2 py-1 rounded font-mono text-xs">
-            {user.tempPassword}
-          </code>
-          <button
-            onClick={async () => {
-              await navigator.clipboard.writeText(credentials);
-              setCopied(true);
-              setTimeout(() => setCopied(false), 1500);
-            }}
-            className="text-xs text-primary underline"
-            title="Copy email and password"
-          >
-            {copied ? "Copied!" : "Copy"}
-          </button>
-          <span className="text-xs text-accent font-medium">{remaining}s</span>
-        </div>
-      );
-    }
-  }
-
-  return (
-    <tr className="border-t border-border">
-      <td className="p-3 font-medium">{user.fullName || "—"}</td>
-      <td className="p-3 text-muted-foreground">{user.email}</td>
-      <td className="p-3 text-muted-foreground">{user.phone || "—"}</td>
-      <td className="p-3">
-        <StatusBadge status={user.status} />
-      </td>
-      <td className="p-3 text-xs text-muted-foreground whitespace-nowrap">
-        {fmtLastLogin(user.lastLoginAt)}
-      </td>
-      <td className="p-3">{tempBlock}</td>
-      <td className="p-3 text-right whitespace-nowrap">
-        {user.status === STATUS.PENDING && (
-          <button
-            onClick={() => onApprove(user)}
-            className="text-sm bg-green-600 text-white px-3 py-1 rounded hover:opacity-90 mr-2"
-          >
-            Approve
-          </button>
-        )}
-        {user.status !== STATUS.PENDING && (
-          <button
-            onClick={() => onToggleDisable(user)}
-            className="text-sm border border-border px-3 py-1 rounded hover:bg-muted/30"
-          >
-            {user.status === STATUS.DISABLED ? "Enable" : "Disable"}
-          </button>
-        )}
-      </td>
-    </tr>
-  );
-}
-
-function UserCard({ user, now, onApprove, onToggleDisable }) {
-  const [copied, setCopied] = useState(false);
-
-  let tempBlock = null;
-  if (user.tempPassword && user.tempPasswordCreatedAtMs) {
-    const remaining = Math.max(
-      0,
-      Math.ceil(
-        (TEMP_PASSWORD_TTL_MS - (now - user.tempPasswordCreatedAtMs)) / 1000,
-      ),
-    );
-    if (remaining > 0) {
-      const credentials = `Email: ${user.email}\nPassword: ${user.tempPassword}`;
-      tempBlock = (
-        <div className="mt-3 p-3 rounded-md bg-muted/40 border border-border">
-          <div className="text-xs text-muted-foreground mb-1">
-            Temp password
-          </div>
-          <div className="flex items-center justify-between gap-2 flex-wrap">
-            <code className="font-mono text-sm break-all">
-              {user.tempPassword}
-            </code>
-            <span className="text-xs text-accent font-medium">
-              {remaining}s left
-            </span>
-          </div>
-          <button
-            onClick={async () => {
-              await navigator.clipboard.writeText(credentials);
-              setCopied(true);
-              setTimeout(() => setCopied(false), 1500);
-            }}
-            className="mt-2 text-xs text-primary underline"
-          >
-            {copied ? "Copied!" : "Copy email & password"}
-          </button>
-        </div>
-      );
-    }
-  }
-
-  return (
-    <div className="bg-card rounded-lg shadow p-4">
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0 flex-1">
-          <div className="font-semibold truncate">{user.fullName || "—"}</div>
-          <div className="text-sm text-muted-foreground break-all">
-            {user.email}
-          </div>
-          {user.phone && (
-            <div className="text-sm text-muted-foreground mt-0.5">
-              {user.phone}
+      <PageHeader
+        title="User management"
+        subtitle="Create and manage all accounts."
+        right={
+          <Button onClick={() => setModal(true)}>
+            <UserPlus className="w-4 h-4 inline mr-1" /> New user
+          </Button>
+        }
+      />
+      {tempPw && (
+        <Alert tone="info">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <div className="font-semibold">
+                Temp password for {tempPw.email}
+              </div>
+              <code className="text-base font-mono">{tempPw.password}</code>
+              <div className="text-xs mt-1">
+                Vanishes in{" "}
+                {Math.max(0, Math.ceil((tempPw.expiresAt - now) / 1000))}s —
+                copy now.
+              </div>
             </div>
-          )}
-          <div className="text-xs text-muted-foreground mt-1">
-            Last login: {fmtLastLogin(user.lastLoginAt)}
-          </div>
-        </div>
-        <StatusBadge status={user.status} />
-      </div>
-
-      {tempBlock}
-
-      <div className="mt-3 flex flex-wrap gap-2">
-        {user.status === STATUS.PENDING && (
-          <button
-            onClick={() => onApprove(user)}
-            className="text-sm bg-green-600 text-white px-3 py-1.5 rounded hover:opacity-90"
-          >
-            Approve
-          </button>
-        )}
-        {user.status !== STATUS.PENDING && (
-          <button
-            onClick={() => onToggleDisable(user)}
-            className="text-sm border border-border px-3 py-1.5 rounded hover:bg-muted/30"
-          >
-            {user.status === STATUS.DISABLED ? "Enable" : "Disable"}
-          </button>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function StatusBadge({ status }) {
-  const styles = {
-    [STATUS.PENDING]: "bg-accent/20 text-accent",
-    [STATUS.APPROVED]: "bg-blue-100 text-blue-700",
-    [STATUS.ACTIVE]: "bg-green-100 text-green-700",
-    [STATUS.DISABLED]: "bg-destructive/20 text-destructive",
-  };
-  return (
-    <span className={`text-xs px-2 py-1 rounded-full ${styles[status] || ""}`}>
-      {statusLabel(status)}
-    </span>
-  );
-}
-
-function fmtLastLogin(ts) {
-  const ms = ts?.toMillis?.();
-  if (!ms) return "Never";
-  const d = new Date(ms);
-  return d.toLocaleString("en-GB", {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-function CreateUserModal({ onClose, adminUser, adminProfile }) {
-  const [fullName, setFullName] = useState("");
-  const [email, setEmail] = useState("");
-  const [phone, setPhone] = useState("");
-  const [role, setRole] = useState(ROLES.EMPLOYEE);
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setError("");
-    setLoading(true);
-    try {
-      const tempPassword = generateTempPassword();
-      const secondaryAuth = getSecondaryAuth();
-      const cred = await createUserWithEmailAndPassword(
-        secondaryAuth,
-        email.trim(),
-        tempPassword,
-      );
-      const uid = cred.user.uid;
-
-      await setDoc(doc(db, COLLECTIONS.USERS, uid), {
-        uid,
-        fullName: fullName.trim(),
-        email: email.trim(),
-        phone: phone.trim(),
-        role,
-        status: STATUS.PENDING,
-        mustChangePassword: true,
-        tempPassword,
-        tempPasswordCreatedAtMs: Date.now(),
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
-
-      // Sign out the secondary instance so admin's session is untouched
-      await fbSignOut(secondaryAuth);
-
-      logAction(
-        AUDIT_ACTIONS.ACCOUNT_CREATED,
-        adminUser?.uid,
-        adminProfile?.role,
-        {
-          targetUserId: uid,
-          targetEmail: email.trim(),
-          targetFullName: fullName.trim(),
-          targetRole: role,
-        },
-      );
-
-      onClose();
-    } catch (err) {
-      if (err.code === "auth/email-already-in-use") {
-        setError("That email is already in use.");
-      } else if (err.code === "auth/invalid-email") {
-        setError("Please enter a valid email address.");
-      } else {
-        setError(err.message || "Could not create user.");
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <div className="fixed inset-0 bg-black/40 flex items-start sm:items-center justify-center px-4 py-6 z-50 overflow-y-auto">
-      <div className="bg-card rounded-lg shadow-xl w-full max-w-md p-5 sm:p-6 my-auto">
-        <h2 className="text-lg font-semibold text-primary mb-1">Create user</h2>
-        <p className="text-sm text-muted-foreground mb-4">
-          A temporary password will be generated and shown on the dashboard for
-          60 seconds.
-        </p>
-
-        {error && (
-          <div className="mb-3 p-3 rounded-md border border-destructive/40 bg-destructive/10 text-destructive text-sm">
-            {error}
-          </div>
-        )}
-
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium mb-1">Role</label>
-            <select
-              value={role}
-              onChange={(e) => setRole(e.target.value)}
-              className="w-full px-3 py-2 rounded-md border border-border bg-card outline-none focus:ring-2 focus:ring-primary"
+            <button
+              onClick={() => navigator.clipboard.writeText(tempPw.password)}
+              className="p-2 hover:bg-accent/20 rounded"
             >
-              <option value={ROLES.EMPLOYER}>Employer</option>
-              <option value={ROLES.EMPLOYEE}>Employee</option>
-            </select>
+              <Copy className="w-4 h-4" />
+            </button>
           </div>
+        </Alert>
+      )}
+      <div className="grid lg:grid-cols-2 gap-6">
+        <Card>
+          <h2 className="font-semibold text-primary mb-3">
+            Employers ({employers.length})
+          </h2>
+          {!employers.length ? (
+            <div className="text-sm text-muted-foreground py-4">None.</div>
+          ) : (
+            <ul className="divide-y divide-border">
+              {employers.map((u) => (
+                <Row key={u.id} u={u} />
+              ))}
+            </ul>
+          )}
+        </Card>
+        <Card>
+          <h2 className="font-semibold text-primary mb-3">
+            Employees ({employees.length})
+          </h2>
+          {!employees.length ? (
+            <div className="text-sm text-muted-foreground py-4">None.</div>
+          ) : (
+            <ul className="divide-y divide-border">
+              {employees.map((u) => (
+                <Row key={u.id} u={u} />
+              ))}
+            </ul>
+          )}
+        </Card>
+      </div>
+
+      <Modal open={modal} onClose={() => setModal(false)} title="Create user">
+        <Alert tone="error">{err}</Alert>
+        <p className="text-xs text-muted-foreground mb-3">
+          All fields are required.
+        </p>
+        <form onSubmit={onCreate} className="space-y-4">
           <Input
             label="Full name"
-            value={fullName}
-            onChange={setFullName}
+            value={f.fullName}
+            onChange={(v) => setF((p) => ({ ...p, fullName: v }))}
             required
           />
           <Input
             label="Email"
             type="email"
-            value={email}
-            onChange={setEmail}
+            value={f.email}
+            onChange={(v) => setF((p) => ({ ...p, email: v }))}
             required
           />
           <Input
             label="Phone"
-            value={phone}
-            onChange={setPhone}
-            placeholder="+254 7XX XXX XXX"
+            value={f.phone}
+            onChange={(v) => setF((p) => ({ ...p, phone: v }))}
+            required
           />
-
-          <div className="flex justify-end gap-3 pt-2">
-            <button
+          <Textarea
+            label="Address"
+            value={f.address}
+            onChange={(v) => setF((p) => ({ ...p, address: v }))}
+            rows={2}
+            required
+          />
+          <Textarea
+            label="Bio"
+            value={f.bio}
+            onChange={(v) => setF((p) => ({ ...p, bio: v }))}
+            rows={2}
+            required
+          />
+          <div className="grid grid-cols-2 gap-4">
+            <Input
+              label="Date of birth"
+              type="date"
+              value={f.dateOfBirth}
+              onChange={(v) => setF((p) => ({ ...p, dateOfBirth: v }))}
+              required
+            />
+            <Input
+              label="National ID"
+              value={f.nationalId}
+              onChange={(v) => setF((p) => ({ ...p, nationalId: v }))}
+              required
+            />
+          </div>
+          <Input
+            label="Emergency contact"
+            value={f.emergencyContact}
+            onChange={(v) => setF((p) => ({ ...p, emergencyContact: v }))}
+            required
+          />
+          <Select
+            label="Role"
+            value={f.role}
+            onChange={(v) => setF((p) => ({ ...p, role: v }))}
+            options={[
+              { value: ROLES.EMPLOYEE, label: "Employee" },
+              { value: ROLES.EMPLOYER, label: "Employer" },
+              { value: ROLES.ADMIN, label: "Admin" },
+            ]}
+          />
+          {f.role === ROLES.EMPLOYER && (
+            <div className="grid grid-cols-2 gap-4">
+              <Select
+                label="Tier"
+                value={f.tier}
+                onChange={(v) => setF((p) => ({ ...p, tier: v }))}
+                options={EMPLOYER_TIERS}
+              />
+              <Select
+                label="Subscription status"
+                value={f.subscriptionStatus}
+                onChange={(v) => setF((p) => ({ ...p, subscriptionStatus: v }))}
+                options={SUBSCRIPTION_STATUS_OPTIONS.map((s) => ({
+                  value: s,
+                  label: SUBSCRIPTION_STATUS_LABELS[s] || s,
+                }))}
+              />
+            </div>
+          )}
+          <div className="flex gap-2">
+            <Button type="submit" disabled={busy}>
+              {busy ? "Creating…" : "Create"}
+            </Button>
+            <Button
               type="button"
-              onClick={onClose}
-              className="px-4 py-2 rounded-md border border-border hover:bg-muted/30"
+              variant="outline"
+              onClick={() => setModal(false)}
             >
               Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={loading}
-              className="px-4 py-2 rounded-md bg-primary text-primary-foreground font-medium hover:opacity-90 disabled:opacity-50"
-            >
-              {loading ? "Creating…" : "Create user"}
-            </button>
+            </Button>
           </div>
         </form>
-      </div>
-    </div>
-  );
-}
+      </Modal>
 
-function Input({
-  label,
-  value,
-  onChange,
-  type = "text",
-  required,
-  placeholder,
-}) {
-  return (
-    <div>
-      <label className="block text-sm font-medium mb-1">{label}</label>
-      <input
-        type={type}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        required={required}
-        placeholder={placeholder}
-        className="w-full px-3 py-2 rounded-md border border-border bg-card outline-none focus:ring-2 focus:ring-primary"
-      />
-    </div>
+      {/* Edit user details modal (admin-only) */}
+      <Modal
+        open={!!editing}
+        onClose={() => setEditing(null)}
+        title={
+          editing
+            ? `Edit details — ${editing.fullName || editing.email}`
+            : "Edit details"
+        }
+      >
+        <Alert tone="error">{eErr}</Alert>
+        <form onSubmit={onSaveEdit} className="space-y-4">
+          <Input
+            label="Full name"
+            value={ef.fullName}
+            onChange={(v) => setEf((p) => ({ ...p, fullName: v }))}
+            required
+          />
+          <Input
+            label="Phone"
+            value={ef.phone}
+            onChange={(v) => setEf((p) => ({ ...p, phone: v }))}
+          />
+          <Textarea
+            label="Address"
+            value={ef.address}
+            onChange={(v) => setEf((p) => ({ ...p, address: v }))}
+            rows={2}
+          />
+          <Textarea
+            label="Bio"
+            value={ef.bio}
+            onChange={(v) => setEf((p) => ({ ...p, bio: v }))}
+            rows={2}
+          />
+          <div className="grid grid-cols-2 gap-4">
+            <Input
+              label="Date of birth"
+              type="date"
+              value={ef.dateOfBirth}
+              onChange={(v) => setEf((p) => ({ ...p, dateOfBirth: v }))}
+            />
+            <Input
+              label="National ID"
+              value={ef.nationalId}
+              onChange={(v) => setEf((p) => ({ ...p, nationalId: v }))}
+            />
+          </div>
+          <Input
+            label="Emergency contact"
+            value={ef.emergencyContact}
+            onChange={(v) => setEf((p) => ({ ...p, emergencyContact: v }))}
+          />
+          {editing?.role === ROLES.EMPLOYER && (
+            <div className="grid grid-cols-2 gap-4">
+              <Select
+                label="Tier"
+                value={ef.tier}
+                onChange={(v) => setEf((p) => ({ ...p, tier: v }))}
+                options={EMPLOYER_TIERS}
+              />
+              <Select
+                label="Subscription status"
+                value={ef.subscriptionStatus}
+                onChange={(v) =>
+                  setEf((p) => ({ ...p, subscriptionStatus: v }))
+                }
+                options={SUBSCRIPTION_STATUS_OPTIONS.map((s) => ({
+                  value: s,
+                  label: SUBSCRIPTION_STATUS_LABELS[s] || s,
+                }))}
+              />
+            </div>
+          )}
+          <div className="flex gap-2">
+            <Button type="submit" disabled={eBusy}>
+              {eBusy ? "Saving…" : "Save changes"}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setEditing(null)}
+            >
+              Cancel
+            </Button>
+          </div>
+        </form>
+      </Modal>
+    </Layout>
   );
 }

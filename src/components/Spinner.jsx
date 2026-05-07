@@ -1,3 +1,4 @@
+// Full-page spinner.
 export default function Spinner({ size = 8, className = "" }) {
   return (
     <div

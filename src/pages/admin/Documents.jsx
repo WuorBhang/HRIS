@@ -1,351 +1,271 @@
+// Admin documents: upload + list + delete (Supabase storage).
 import { useEffect, useMemo, useState } from "react";
 import { collection, onSnapshot, orderBy, query } from "firebase/firestore";
-import { Upload, Trash2, FileText, Download } from "lucide-react";
-import Layout from "../../components/Layout";
+import { Upload, Trash2 } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { db } from "../../lib/firebase";
 import {
   COLLECTIONS,
   DOCUMENT_TYPES,
   DOCUMENT_TYPE_LABELS,
+  MONTHLY_TYPES,
 } from "../../lib/constants";
-import { formatDate } from "../../lib/utils";
 import {
-  deleteContractDocument,
   uploadContractDocument,
+  deleteContractDocument,
+  humanFileSize,
 } from "../../lib/documents";
-import { AUDIT_ACTIONS, logAction } from "../../lib/audit";
+import { formatDate } from "../../lib/utils";
+import { AUDIT, logAction } from "../../lib/audit";
+import {
+  Input,
+  Select,
+  Button,
+  Alert,
+  Card,
+  PageHeader,
+  Modal,
+} from "../../lib/ui";
+import Layout from "../../components/Layout";
 
-export default function AdminDocuments() {
+export default function Documents() {
   const { user, profile } = useAuth();
   const [contracts, setContracts] = useState([]);
   const [docs, setDocs] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [showUpload, setShowUpload] = useState(false);
-  const [filterContract, setFilterContract] = useState("all");
+  const [filter, setFilter] = useState("all");
+  const [modal, setModal] = useState(false);
 
-  useEffect(() => {
-    const unsubC = onSnapshot(
-      query(
+  // Auto-derived "today" values used to prefill the upload form.
+  const today = new Date();
+  const todayISO = today.toISOString().slice(0, 10); // YYYY-MM-DD
+  const todayMonth = todayISO.slice(0, 7); // YYYY-MM
+  const todayLabel = today.toLocaleDateString("en-GB", {
+    weekday: "long",
+    day: "2-digit",
+    month: "long",
+    year: "numeric",
+  });
+
+  const [f, setF] = useState({
+    contractId: "",
+    type: DOCUMENT_TYPES.PAYSLIP,
+    month: todayMonth,
+    title: "",
+    file: null,
+  });
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(
+    () =>
+      onSnapshot(
         collection(db, COLLECTIONS.CONTRACTS),
-        orderBy("createdAt", "desc"),
+        (s) => setContracts(s.docs.map((d) => ({ id: d.id, ...d.data() }))),
+        () => {},
       ),
-      (s) => setContracts(s.docs.map((d) => ({ id: d.id, ...d.data() }))),
-    );
-    const unsubD = onSnapshot(
-      query(
-        collection(db, COLLECTIONS.DOCUMENTS),
-        orderBy("uploadedAt", "desc"),
+    [],
+  );
+  useEffect(
+    () =>
+      onSnapshot(
+        query(
+          collection(db, COLLECTIONS.DOCUMENTS),
+          orderBy("uploadedAt", "desc"),
+        ),
+        (s) => setDocs(s.docs.map((d) => ({ id: d.id, ...d.data() }))),
+        () => {},
       ),
-      (s) => {
-        setDocs(s.docs.map((d) => ({ id: d.id, ...d.data() })));
-        setLoading(false);
-      },
-      () => setLoading(false),
-    );
-    return () => {
-      unsubC();
-      unsubD();
-    };
-  }, []);
+    [],
+  );
 
   const filtered = useMemo(
     () =>
-      filterContract === "all"
-        ? docs
-        : docs.filter((d) => d.contractId === filterContract),
-    [docs, filterContract],
+      filter === "all" ? docs : docs.filter((d) => d.contractId === filter),
+    [docs, filter],
   );
 
-  const remove = async (d) => {
-    if (!confirm(`Delete "${d.title}"?`)) return;
+  // Upload submit.
+  const onUpload = async (e) => {
+    e.preventDefault();
+    setErr("");
+    setBusy(true);
     try {
-      await deleteContractDocument(d);
-      logAction(AUDIT_ACTIONS.DOCUMENT_DELETED, user.uid, profile?.role, {
-        documentId: d.id,
-        contractId: d.contractId,
-        type: d.type,
+      const contract = contracts.find((c) => c.id === f.contractId);
+      const { id } = await uploadContractDocument({
+        contract,
+        file: f.file,
+        type: f.type,
+        month: f.month,
+        title: f.title,
+        uploadedBy: user.uid,
       });
-    } catch (err) {
-      alert(err.message || "Could not delete.");
+      logAction(AUDIT.DOCUMENT_UPLOADED, user.uid, profile?.role, {
+        documentId: id,
+        type: f.type,
+        contractId: f.contractId,
+      });
+      setF({
+        contractId: "",
+        type: DOCUMENT_TYPES.PAYSLIP,
+        month: todayMonth,
+        title: "",
+        file: null,
+      });
+      setModal(false);
+    } catch (e2) {
+      setErr(e2.message);
+    } finally {
+      setBusy(false);
     }
+  };
+
+  // Delete doc.
+  const onDelete = async (d) => {
+    if (!confirm(`Delete "${d.title}"?`)) return;
+    await deleteContractDocument(d);
+    logAction(AUDIT.DOCUMENT_DELETED, user.uid, profile?.role, {
+      documentId: d.id,
+    });
   };
 
   return (
     <Layout>
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
-        <div>
-          <h1 className="text-xl sm:text-2xl font-bold text-primary">
-            Documents
-          </h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            Upload signed contracts, payslips and statutory records and link
-            them to an employer ↔ employee contract.
-          </p>
+      <PageHeader
+        title="Documents"
+        subtitle="Upload and manage employee documents."
+        right={
+          <Button onClick={() => setModal(true)}>
+            <Upload className="w-4 h-4 inline mr-1" /> Upload
+          </Button>
+        }
+      />
+      <Card>
+        <div className="mb-4 max-w-xs">
+          <Select
+            label="Filter by contract"
+            value={filter}
+            onChange={setFilter}
+          >
+            <option value="all">All contracts</option>
+            {contracts.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.employeeName} ↔ {c.employerName}
+              </option>
+            ))}
+          </Select>
         </div>
-        <button
-          onClick={() => setShowUpload(true)}
-          disabled={contracts.length === 0}
-          className="inline-flex items-center gap-2 bg-primary text-primary-foreground px-4 py-2 rounded-md font-medium hover:opacity-90 disabled:opacity-50 w-full sm:w-auto justify-center"
-        >
-          <Upload className="w-4 h-4" />
-          Upload document
-        </button>
-      </div>
-
-      <div className="mb-4 flex flex-wrap items-center gap-2">
-        <span className="text-xs text-muted-foreground">
-          Filter by contract:
-        </span>
-        <select
-          value={filterContract}
-          onChange={(e) => setFilterContract(e.target.value)}
-          className="text-sm border border-border rounded-md px-2 py-1 bg-card outline-none focus:ring-2 focus:ring-primary"
-        >
-          <option value="all">All contracts</option>
-          {contracts.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.employerName || "—"} ↔ {c.employeeName || "—"}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      {loading ? (
-        <div className="bg-card rounded-lg shadow p-12 text-center text-sm text-muted-foreground">
-          Loading…
-        </div>
-      ) : filtered.length === 0 ? (
-        <div className="bg-card rounded-lg shadow p-12 text-center text-sm text-muted-foreground">
-          No documents yet.
-        </div>
-      ) : (
-        <div className="bg-card rounded-lg shadow overflow-x-auto">
-          <table className="w-full text-sm min-w-[720px]">
-            <thead className="bg-muted/40 text-left">
-              <tr>
-                <th className="p-3">Title</th>
-                <th className="p-3">Type</th>
-                <th className="p-3">Month</th>
-                <th className="p-3">Linked to</th>
-                <th className="p-3">Uploaded</th>
-                <th className="p-3 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((d) => {
-                const c = contracts.find((x) => x.id === d.contractId);
-                return (
-                  <tr key={d.id} className="border-t border-border">
-                    <td className="p-3 font-medium flex items-center gap-2">
-                      <FileText className="w-4 h-4 text-muted-foreground shrink-0" />
-                      {d.title}
-                    </td>
-                    <td className="p-3">
-                      <span className="text-xs px-2 py-0.5 rounded-full bg-primary/10 text-primary font-medium">
-                        {DOCUMENT_TYPE_LABELS[d.type] || d.type}
-                      </span>
-                    </td>
-                    <td className="p-3 text-muted-foreground">
-                      {d.month || "—"}
-                    </td>
-                    <td className="p-3 text-muted-foreground">
-                      {c
-                        ? `${c.employerName || "—"} ↔ ${c.employeeName || "—"}`
-                        : "—"}
-                    </td>
-                    <td className="p-3 text-muted-foreground">
-                      {formatDate(d.uploadedAt)}
-                    </td>
-                    <td className="p-3 text-right whitespace-nowrap">
-                      <a
-                        href={d.url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-flex items-center gap-1 text-primary text-sm mr-3 hover:underline"
-                      >
-                        <Download className="w-4 h-4" />
-                        View
-                      </a>
-                      <button
-                        onClick={() => remove(d)}
-                        className="text-sm text-destructive hover:underline inline-flex items-center gap-1"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                        Delete
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {showUpload && (
-        <UploadModal
-          contracts={contracts}
-          onClose={() => setShowUpload(false)}
-          uploader={user}
-          uploaderRole={profile?.role}
-        />
-      )}
-    </Layout>
-  );
-}
-
-function UploadModal({ contracts, onClose, uploader, uploaderRole }) {
-  const [contractId, setContractId] = useState(contracts[0]?.id || "");
-  const [type, setType] = useState(DOCUMENT_TYPES.PAYSLIP);
-  const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
-  const [title, setTitle] = useState("");
-  const [file, setFile] = useState(null);
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
-
-  const submit = async (e) => {
-    e.preventDefault();
-    setError("");
-    if (!contractId) return setError("Pick a contract.");
-    if (!file) return setError("Pick a file.");
-    if (!month) return setError("Month is required (YYYY-MM).");
-    setLoading(true);
-    try {
-      const contract = contracts.find((c) => c.id === contractId);
-      const res = await uploadContractDocument({
-        contract,
-        file,
-        type,
-        month,
-        title,
-        uploadedBy: uploader?.uid,
-      });
-      logAction(AUDIT_ACTIONS.DOCUMENT_UPLOADED, uploader?.uid, uploaderRole, {
-        documentId: res.id,
-        contractId,
-        type,
-        month,
-      });
-      onClose();
-    } catch (err) {
-      setError(err.message || "Upload failed.");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <div className="fixed inset-0 bg-black/40 flex items-start sm:items-center justify-center px-4 py-6 z-50 overflow-y-auto">
-      <div className="bg-card rounded-lg shadow-xl w-full max-w-md p-5 sm:p-6 my-auto">
-        <h2 className="text-lg font-semibold text-primary mb-4">
-          Upload document
-        </h2>
-        {error && (
-          <div className="mb-3 p-3 rounded-md border border-destructive/40 bg-destructive/10 text-destructive text-sm">
-            {error}
+        {!filtered.length ? (
+          <div className="text-center text-sm text-muted-foreground py-10">
+            No documents.
           </div>
+        ) : (
+          <ul className="divide-y divide-border">
+            {filtered.map((d) => (
+              <li key={d.id} className="py-3 flex flex-wrap items-center gap-3">
+                <div className="flex-1 min-w-0">
+                  <div className="font-medium truncate">{d.title}</div>
+                  <div className="text-xs text-muted-foreground">
+                    {DOCUMENT_TYPE_LABELS[d.type] || d.type}
+                    {d.contractNo ? ` · ${d.contractNo}` : ""} ·{" "}
+                    {d.employeeName} · {humanFileSize(d.size)} ·{" "}
+                    {formatDate(d.uploadedAt)}
+                  </div>
+                </div>
+                <a
+                  href={d.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-primary text-sm hover:underline"
+                >
+                  View
+                </a>
+                <button
+                  onClick={() => onDelete(d)}
+                  className="text-destructive p-1 hover:bg-destructive/10 rounded"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </li>
+            ))}
+          </ul>
         )}
-        <form onSubmit={submit} className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium mb-1">Contract</label>
-            <select
-              value={contractId}
-              onChange={(e) => setContractId(e.target.value)}
-              className="w-full px-3 py-2 rounded-md border border-border bg-card outline-none focus:ring-2 focus:ring-primary"
+      </Card>
+
+      <Modal
+        open={modal}
+        onClose={() => setModal(false)}
+        title="Upload document"
+      >
+        <Alert tone="error">{err}</Alert>
+        <form onSubmit={onUpload} className="space-y-4">
+          <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+            Upload date is auto-detected:{" "}
+            <span className="font-semibold text-primary">{todayLabel}</span>
+          </div>
+          <Select
+            label="Contract"
+            value={f.contractId}
+            onChange={(v) => setF((p) => ({ ...p, contractId: v }))}
+            required
+          >
+            <option value="">Pick contract…</option>
+            {contracts.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.contractNo ? `${c.contractNo} · ` : ""}
+                {c.employeeName} ↔ {c.employerName}
+              </option>
+            ))}
+          </Select>
+          <Select
+            label="Type"
+            value={f.type}
+            onChange={(v) => setF((p) => ({ ...p, type: v }))}
+          >
+            {Object.values(DOCUMENT_TYPES).map((t) => (
+              <option key={t} value={t}>
+                {DOCUMENT_TYPE_LABELS[t]}
+              </option>
+            ))}
+          </Select>
+          {MONTHLY_TYPES.includes(f.type) && (
+            <Input
+              label="Month (YYYY-MM)"
+              value={f.month}
+              onChange={(v) => setF((p) => ({ ...p, month: v }))}
+              placeholder="2025-03"
               required
-            >
-              {contracts.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.employerName || "—"} ↔ {c.employeeName || "—"}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="block text-sm font-medium mb-1">Type</label>
-            <select
-              value={type}
-              onChange={(e) => setType(e.target.value)}
-              className="w-full px-3 py-2 rounded-md border border-border bg-card outline-none focus:ring-2 focus:ring-primary"
-            >
-              {Object.entries(DOCUMENT_TYPE_LABELS).map(([k, v]) => (
-                <option key={k} value={k}>
-                  {v}
-                </option>
-              ))}
-            </select>
-          </div>
-          {type !== DOCUMENT_TYPES.CONTRACT && (
-            <div>
-              <label className="block text-sm font-medium mb-1">Month</label>
-              <input
-                type="month"
-                value={month}
-                onChange={(e) => setMonth(e.target.value)}
-                className="w-full px-3 py-2 rounded-md border border-border bg-card outline-none focus:ring-2 focus:ring-primary"
-                required
-              />
-            </div>
-          )}
-          {type === DOCUMENT_TYPES.CONTRACT && (
-            <div>
-              <label className="block text-sm font-medium mb-1">
-                Effective month
-              </label>
-              <input
-                type="month"
-                value={month}
-                onChange={(e) => setMonth(e.target.value)}
-                className="w-full px-3 py-2 rounded-md border border-border bg-card outline-none focus:ring-2 focus:ring-primary"
-                required
-              />
-              <p className="text-xs text-muted-foreground mt-1">
-                Required for every document. Use the contract start month.
-              </p>
-            </div>
-          )}
-          <div>
-            <label className="block text-sm font-medium mb-1">Title</label>
-            <input
-              type="text"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="Optional — defaults to filename"
-              className="w-full px-3 py-2 rounded-md border border-border bg-card outline-none focus:ring-2 focus:ring-primary"
             />
-          </div>
+          )}
+          <Input
+            label="Title (optional)"
+            value={f.title}
+            onChange={(v) => setF((p) => ({ ...p, title: v }))}
+          />
           <div>
             <label className="block text-sm font-medium mb-1">File</label>
             <input
               type="file"
-              accept="application/pdf,image/*"
-              onChange={(e) => setFile(e.target.files?.[0] || null)}
+              onChange={(e) =>
+                setF((p) => ({ ...p, file: e.target.files?.[0] || null }))
+              }
               required
               className="w-full text-sm"
             />
-            <p className="text-xs text-muted-foreground mt-1">
-              PDF or image, max 20 MB.
-            </p>
           </div>
-          <div className="flex justify-end gap-3 pt-2">
-            <button
+          <div className="flex gap-2">
+            <Button type="submit" disabled={busy}>
+              {busy ? "Uploading…" : "Upload"}
+            </Button>
+            <Button
               type="button"
-              onClick={onClose}
-              className="px-4 py-2 rounded-md border border-border hover:bg-muted/30"
+              variant="outline"
+              onClick={() => setModal(false)}
             >
               Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={loading}
-              className="px-4 py-2 rounded-md bg-primary text-primary-foreground font-medium hover:opacity-90 disabled:opacity-50"
-            >
-              {loading ? "Uploading…" : "Upload"}
-            </button>
+            </Button>
           </div>
         </form>
-      </div>
-    </div>
+      </Modal>
+    </Layout>
   );
 }

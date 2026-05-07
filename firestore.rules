@@ -26,10 +26,15 @@ service cloud.firestore {
       // (matches AuthContext bootstrap flow).
       allow create: if isAdmin() || isSelf(uid);
 
-      // Self can update own profile but cannot change role or grant themselves
-      // a status they shouldn't have. Allowed self-status transitions:
-      //   approved -> active   (after first password change)
-      // Admin can update anything.
+      // Self can update only their avatar (photoURL) plus the housekeeping
+      // fields needed by the first-login flow (mustChangePassword,
+      // updatedAt) and the approved -> active status transition.
+      // All other personal-detail fields (fullName, phone, address, bio,
+      // dateOfBirth, nationalId, emergencyContact, role, email, etc.) are
+      // editable by admin only.
+      // Employer-specific commercial fields (tier, subscriptionStatus) are
+      // also strictly admin-only — explicitly excluded from the affected
+      // keys list below.
       allow update: if isAdmin()
         || (
           isSelf(uid)
@@ -39,6 +44,10 @@ service cloud.firestore {
             || (resource.data.status == 'approved' && request.resource.data.status == 'active')
           )
           && !('tempPassword' in request.resource.data.diff(resource.data).affectedKeys())
+          && !('tier' in request.resource.data.diff(resource.data).affectedKeys())
+          && !('subscriptionStatus' in request.resource.data.diff(resource.data).affectedKeys())
+          && request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['photoURL', 'updatedAt', 'mustChangePassword', 'status', 'lastLoginAt', 'lastSeenAt', 'sessionStartAt'])
         );
 
       // Only admin can delete users.
@@ -54,10 +63,17 @@ service cloud.firestore {
       allow create, update, delete: if isAdmin();
     }
 
-    // Public holidays — readable by any signed-in user; writable by admin only
+    // Public holidays — readable by any signed-in user.
+    // Seeded Kenya holidays (id prefix `ke-`) are auto-synced from
+    // src/lib/holidaySeed.js on every login, so any signed-in user is
+    // allowed to create / update / delete those specific docs. Holidays
+    // added manually (any other id) remain admin-only.
     match /public_holidays/{holidayId} {
       allow read: if isSignedIn();
-      allow create, update, delete: if isAdmin();
+      allow create: if isAdmin()
+        || (isSignedIn() && holidayId.matches('^ke-.*'));
+      allow update, delete: if isAdmin()
+        || (isSignedIn() && holidayId.matches('^ke-.*'));
     }
 
     // Overtime / holiday work records
@@ -80,8 +96,8 @@ service cloud.firestore {
 
     // Activity logs — append-only audit trail.
     // Any signed-in user can record an entry about their own action.
-    // Admin can read everything; users can read their own entries.
-    // No one can update (logs are immutable).
+    // Users can read their own log entries (where performedBy == their uid).
+    // Admin can read all logs and delete them. No one can update (logs are immutable).
     match /activity_logs/{logId} {
       allow create: if isSignedIn()
         && request.resource.data.performedBy == request.auth.uid;
@@ -93,15 +109,20 @@ service cloud.firestore {
 
     // Documents (contracts, payslips, IDs, policies, etc.)
     // Uploaded by admin and assigned to a specific user via ownerId.
-    // - The owner can read their own documents.
-    // - The linked employer (if it's a contract-scoped document) can read.
-    // - Admin can read and manage all.
+    // The owner (employee) and the linked employer can read their documents;
+    // admin can read and manage all.
     match /documents/{docId} {
       allow read: if isAdmin()
         || (isSignedIn() && request.auth.uid == resource.data.ownerId)
-        || (isSignedIn() && request.auth.uid == resource.data.employerId)
-        || (isSignedIn() && request.auth.uid == resource.data.employeeId);
+        || (isSignedIn() && request.auth.uid == resource.data.employerId);
       allow create, update, delete: if isAdmin();
+    }
+
+    // App-level counters (e.g. contract numbering). Admin-only writes.
+    match /counters/{counterId} {
+      allow read: if isSignedIn();
+      allow create, update: if isAdmin();
+      allow delete: if false;
     }
 
     // Monthly records (payslips, statutory filings, payroll summaries).
