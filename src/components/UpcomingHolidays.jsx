@@ -25,23 +25,25 @@ export default function UpcomingHolidays({ horizontal = false }) {
   if (horizontal) {
     return (
       <div
-        className="rounded-lg shadow px-4 py-3 mb-6 flex items-center gap-4 overflow-x-auto"
+        className="rounded-lg shadow px-3 py-3 sm:px-4 mb-6 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4"
         style={{ backgroundColor: "#f39c12", color: "#1b4f72" }}
       >
         <h3
-          className="font-semibold whitespace-nowrap text-sm"
+          className="font-semibold text-sm sm:whitespace-nowrap"
           style={{ color: "#1b4f72" }}
         >
           Upcoming public holidays:
         </h3>
-        <ul className="flex items-center gap-3 flex-1">
-          {list.map((h) => (
+        <ul className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 flex-1 sm:flex-wrap">
+          {list.map((h, i) => (
             <li
               key={h.id}
-              className="flex items-center gap-2 text-sm whitespace-nowrap pr-3 last:pr-0"
+              className={`flex flex-wrap items-center gap-x-2 gap-y-1 text-sm sm:whitespace-nowrap sm:pr-3 ${
+                i === list.length - 1 ? "" : "sm:border-r"
+              }`}
               style={{
                 color: "#1b4f72",
-                borderRight: "1px solid rgba(27,79,114,0.3)",
+                borderColor: "rgba(27,79,114,0.3)",
               }}
             >
               <span className="font-semibold">{h.name}</span>
