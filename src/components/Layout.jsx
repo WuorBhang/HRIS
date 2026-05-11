@@ -17,7 +17,6 @@ import {
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { ROLES } from "../lib/constants";
-import { AUDIT, logAction, labelForPath } from "../lib/audit";
 import Avatar from "./Avatar";
 
 const NAV = {
@@ -87,22 +86,6 @@ export default function Layout({ children }) {
 
   // Close drawer on route change.
   useEffect(() => setOpen(false), [location]);
-
-  // Audit page views for the signed-in user (admin, employer, employee).
-  // Tracks "what tasks/pages users open" so the admin audit shows app usage.
-  useEffect(() => {
-    if (!profile?.id || !location) return;
-    // Strip query/hash and ignore noisy auth-only paths.
-    const path = location.split("?")[0].split("#")[0];
-    if (path === "/login" || path === "/unauthorized") return;
-    const t = setTimeout(() => {
-      logAction(AUDIT.PAGE_VIEW, profile.id, profile.role, {
-        path,
-        page: labelForPath(path),
-      });
-    }, 250);
-    return () => clearTimeout(t);
-  }, [location, profile?.id, profile?.role]);
 
   const onSignOut = async () => {
     await signOut();

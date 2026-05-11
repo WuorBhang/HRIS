@@ -26,44 +26,6 @@ export const AUDIT = {
   HOLIDAY_WORK_REJECTED: "holiday_work.rejected",
   DOCUMENT_UPLOADED: "document.uploaded",
   DOCUMENT_DELETED: "document.deleted",
-  PAGE_VIEW: "page.view",
-};
-
-// Friendly label for a page path (used in audit metadata + admin analytics).
-export const labelForPath = (path) => {
-  if (!path) return "Unknown";
-  const map = {
-    "/dashboard": "Dashboard",
-    "/profile": "My profile",
-    "/change-password": "Change password",
-    "/my-activity": "My activity",
-    "/admin/dashboard": "Admin · Dashboard",
-    "/admin/users": "Admin · Users",
-    "/admin/contracts": "Admin · Contracts",
-    "/admin/documents": "Admin · Documents",
-    "/admin/public-holidays": "Admin · Public holidays",
-    "/admin/audit-logs": "Admin · Audit logs",
-    "/admin/salary-advances": "Admin · Salary advances",
-    "/admin/profile": "Admin · Profile",
-    "/employer/dashboard": "Employer · Dashboard",
-    "/employer/employees": "Employer · My employees",
-    "/employer/leave-requests": "Employer · Leave requests",
-    "/employer/timesheets": "Employer · Timesheets",
-    "/employer/documents": "Employer · Documents",
-    "/employer/payslips": "Employer · Payslips",
-    "/employer/profile": "Employer · Profile",
-    "/employee/dashboard": "Employee · Dashboard",
-    "/employee/leave": "Employee · Leave",
-    "/employee/overtime": "Employee · Overtime",
-    "/employee/holiday": "Employee · Holiday work",
-    "/employee/documents": "Employee · My documents",
-    "/employee/payslips": "Employee · Payslips",
-    "/employee/profile": "Employee · Profile",
-  };
-  if (map[path]) return map[path];
-  if (path.startsWith("/employer/employees/"))
-    return "Employer · Employee detail";
-  return path;
 };
 
 // Best-effort audit log write.

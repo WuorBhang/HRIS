@@ -16,7 +16,6 @@ import { COLLECTIONS } from "../../lib/constants";
 import { formatDate } from "../../lib/utils";
 import { subscribeDocumentsForContract } from "../../lib/documents";
 import { Card, PageHeader } from "../../lib/ui";
-import { StatusPill } from "../../lib/ui";
 import Layout from "../../components/Layout";
 import DocumentList from "../../components/DocumentList";
 import Spinner from "../../components/Spinner";
@@ -102,28 +101,6 @@ export default function EmployeeDetail() {
     };
   }, [leave, contract]);
 
-  // Status counts for leave + timesheet (overtime/holiday work).
-  const counts = useMemo(() => {
-    const tally = (rows) => {
-      const c = { pending: 0, approved: 0, rejected: 0, total: rows.length };
-      for (const r of rows) {
-        const s = r.status || "pending";
-        if (s in c) c[s]++;
-      }
-      return c;
-    };
-    return { leave: tally(leave), time: tally(overtime) };
-  }, [leave, overtime]);
-
-  const payslips = useMemo(
-    () => docs.filter((d) => d.type === "payslip"),
-    [docs],
-  );
-  const contractDocs = useMemo(
-    () => docs.filter((d) => d.type === "contract"),
-    [docs],
-  );
-
   if (loading)
     return (
       <Layout>
@@ -159,173 +136,40 @@ export default function EmployeeDetail() {
       </div>
 
       {tab === "overview" && balances && (
-        <div className="space-y-4">
-          {/* Quick summary cards: leave + timesheet counts, payslip + contract docs. */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <Card>
-              <div className="flex items-center justify-between mb-2">
-                <h3 className="font-semibold text-primary">Leave</h3>
-                <button
-                  type="button"
-                  onClick={() => setTab("leave")}
-                  className="text-xs text-primary hover:underline"
-                >
-                  View all ({counts.leave.total})
-                </button>
-              </div>
-              <div className="grid grid-cols-3 gap-2 text-center">
-                <div className="bg-amber-50 rounded p-2">
-                  <div className="text-lg font-bold text-amber-700">
-                    {counts.leave.pending}
-                  </div>
-                  <div className="text-[11px] text-muted-foreground">
-                    Pending
-                  </div>
-                </div>
-                <div className="bg-green-50 rounded p-2">
-                  <div className="text-lg font-bold text-green-700">
-                    {counts.leave.approved}
-                  </div>
-                  <div className="text-[11px] text-muted-foreground">
-                    Approved
-                  </div>
-                </div>
-                <div className="bg-red-50 rounded p-2">
-                  <div className="text-lg font-bold text-red-700">
-                    {counts.leave.rejected}
-                  </div>
-                  <div className="text-[11px] text-muted-foreground">
-                    Rejected
-                  </div>
-                </div>
-              </div>
-            </Card>
-
-            <Card>
-              <div className="flex items-center justify-between mb-2">
-                <h3 className="font-semibold text-primary">Timesheet</h3>
-                <button
-                  type="button"
-                  onClick={() => setTab("timesheet")}
-                  className="text-xs text-primary hover:underline"
-                >
-                  View all ({counts.time.total})
-                </button>
-              </div>
-              <div className="grid grid-cols-3 gap-2 text-center">
-                <div className="bg-amber-50 rounded p-2">
-                  <div className="text-lg font-bold text-amber-700">
-                    {counts.time.pending}
-                  </div>
-                  <div className="text-[11px] text-muted-foreground">
-                    Pending
-                  </div>
-                </div>
-                <div className="bg-green-50 rounded p-2">
-                  <div className="text-lg font-bold text-green-700">
-                    {counts.time.approved}
-                  </div>
-                  <div className="text-[11px] text-muted-foreground">
-                    Approved
-                  </div>
-                </div>
-                <div className="bg-red-50 rounded p-2">
-                  <div className="text-lg font-bold text-red-700">
-                    {counts.time.rejected}
-                  </div>
-                  <div className="text-[11px] text-muted-foreground">
-                    Rejected
-                  </div>
-                </div>
-              </div>
-            </Card>
-
-            <Card>
-              <div className="flex items-center justify-between mb-2">
-                <h3 className="font-semibold text-primary">Payslips</h3>
-                <button
-                  type="button"
-                  onClick={() => setTab("payslips")}
-                  className="text-xs text-primary hover:underline"
-                >
-                  View all ({payslips.length})
-                </button>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Payslips uploaded by admin and shared with this contract.
-              </p>
-              {payslips[0] && (
-                <div className="mt-2 text-sm">
-                  Most recent:{" "}
-                  <span className="font-medium">{payslips[0].title}</span>
-                  {payslips[0].month && (
-                    <span className="text-muted-foreground">
-                      {" "}
-                      · {payslips[0].month}
-                    </span>
-                  )}
-                </div>
-              )}
-            </Card>
-
-            <Card>
-              <div className="flex items-center justify-between mb-2">
-                <h3 className="font-semibold text-primary">Contract docs</h3>
-                <button
-                  type="button"
-                  onClick={() => setTab("docs")}
-                  className="text-xs text-primary hover:underline"
-                >
-                  View all ({contractDocs.length})
-                </button>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Contract documents uploaded by admin for this employee.
-              </p>
-              {contractDocs[0] && (
-                <div className="mt-2 text-sm">
-                  Most recent:{" "}
-                  <span className="font-medium">{contractDocs[0].title}</span>
-                </div>
-              )}
-            </Card>
+        <Card>
+          <h3 className="font-semibold mb-3">Leave balances</h3>
+          <div className="grid grid-cols-3 gap-3 mb-6">
+            <Stat
+              label="Paid"
+              value={`${balances.paid.total - balances.paid.used}/${balances.paid.total}`}
+            />
+            <Stat
+              label="Sick"
+              value={`${balances.sick.total - balances.sick.used}/${balances.sick.total}`}
+            />
+            <Stat
+              label="Compassionate"
+              value={`${balances.comp.total - balances.comp.used}/${balances.comp.total}`}
+            />
           </div>
-
-          <Card>
-            <h3 className="font-semibold mb-3">Leave balances</h3>
-            <div className="grid grid-cols-3 gap-3 mb-6">
-              <Stat
-                label="Paid"
-                value={`${balances.paid.total - balances.paid.used}/${balances.paid.total}`}
-              />
-              <Stat
-                label="Sick"
-                value={`${balances.sick.total - balances.sick.used}/${balances.sick.total}`}
-              />
-              <Stat
-                label="Compassionate"
-                value={`${balances.comp.total - balances.comp.used}/${balances.comp.total}`}
-              />
-            </div>
-            <h3 className="font-semibold mb-2">Roles</h3>
-            <div className="flex flex-wrap gap-2">
-              {(contract.roles || []).length ? (
-                contract.roles.map((r) => (
-                  <span
-                    key={r}
-                    className="bg-primary/10 text-primary text-xs px-2 py-1 rounded-full"
-                  >
-                    {r}
-                  </span>
-                ))
-              ) : (
-                <span className="text-sm text-muted-foreground">
-                  No roles set.
+          <h3 className="font-semibold mb-2">Roles</h3>
+          <div className="flex flex-wrap gap-2">
+            {(contract.roles || []).length ? (
+              contract.roles.map((r) => (
+                <span
+                  key={r}
+                  className="bg-primary/10 text-primary text-xs px-2 py-1 rounded-full"
+                >
+                  {r}
                 </span>
-              )}
-            </div>
-          </Card>
-        </div>
+              ))
+            ) : (
+              <span className="text-sm text-muted-foreground">
+                No roles set.
+              </span>
+            )}
+          </div>
+        </Card>
       )}
 
       {tab === "leave" && (
@@ -337,24 +181,10 @@ export default function EmployeeDetail() {
           ) : (
             <ul className="divide-y divide-border">
               {leave.map((l) => (
-                <li
-                  key={l.id}
-                  className="py-3 flex items-start justify-between gap-3"
-                >
-                  <div className="min-w-0 flex-1">
-                    <div className="text-sm font-medium">
-                      {l.type} · {l.days || 0}d
-                    </div>
-                    <div className="text-xs text-muted-foreground">
-                      {formatDate(l.startDate)} → {formatDate(l.endDate)}
-                    </div>
-                    {l.notes && (
-                      <div className="text-xs text-muted-foreground italic mt-1 line-clamp-2">
-                        "{l.notes}"
-                      </div>
-                    )}
-                  </div>
-                  <StatusPill status={l.status || "pending"} />
+                <li key={l.id} className="py-2 text-sm">
+                  <b>{l.type}</b> · {l.days}d · {formatDate(l.startDate)} →{" "}
+                  {formatDate(l.endDate)} ·{" "}
+                  <span className="capitalize">{l.status}</span>
                 </li>
               ))}
             </ul>
@@ -371,25 +201,10 @@ export default function EmployeeDetail() {
           ) : (
             <ul className="divide-y divide-border">
               {overtime.map((o) => (
-                <li
-                  key={o.id}
-                  className="py-3 flex items-start justify-between gap-3"
-                >
-                  <div className="min-w-0 flex-1">
-                    <div className="text-sm font-medium">
-                      {o.isHoliday ? "Holiday work" : "Overtime"} · {o.hours}h
-                    </div>
-                    <div className="text-xs text-muted-foreground">
-                      {formatDate(o.date)}
-                      {o.holidayName ? ` — ${o.holidayName}` : ""}
-                    </div>
-                    {o.notes && (
-                      <div className="text-xs text-muted-foreground italic mt-1 line-clamp-2">
-                        "{o.notes}"
-                      </div>
-                    )}
-                  </div>
-                  <StatusPill status={o.status || "pending"} />
+                <li key={o.id} className="py-2 text-sm">
+                  {o.isHoliday ? "Holiday work" : "Overtime"} · {o.hours}h ·{" "}
+                  {formatDate(o.date)} ·{" "}
+                  <span className="capitalize">{o.status}</span>
                 </li>
               ))}
             </ul>
@@ -399,8 +214,8 @@ export default function EmployeeDetail() {
 
       {tab === "payslips" && (
         <DocumentList
-          documents={payslips}
-          emptyText="No payslips uploaded yet."
+          documents={docs.filter((d) => d.type === "payslip")}
+          emptyText="No payslips."
         />
       )}
       {tab === "statutory" && (
@@ -413,8 +228,8 @@ export default function EmployeeDetail() {
       )}
       {tab === "docs" && (
         <DocumentList
-          documents={contractDocs}
-          emptyText="No contract docs uploaded yet."
+          documents={docs.filter((d) => d.type === "contract")}
+          emptyText="No contract docs."
         />
       )}
     </Layout>

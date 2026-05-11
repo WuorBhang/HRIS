@@ -7,6 +7,7 @@ import { COLLECTIONS } from "../../lib/constants";
 import { PageHeader } from "../../lib/ui";
 import Layout from "../../components/Layout";
 import DocumentList from "../../components/DocumentList";
+import ActivationGate from "../../components/ActivationGate";
 
 export default function Documents() {
   const { user } = useAuth();
@@ -39,10 +40,12 @@ export default function Documents() {
         title="My documents"
         subtitle="Your contracts, payslips, and files."
       />
-      <DocumentList
-        documents={docs}
-        emptyText="No documents shared with you yet."
-      />
+      <ActivationGate>
+        <DocumentList
+          documents={docs}
+          emptyText="No documents shared with you yet."
+        />
+      </ActivationGate>
     </Layout>
   );
 }

@@ -41,7 +41,6 @@ import {
   Modal,
 } from "../../lib/ui";
 import Layout from "../../components/Layout";
-import Avatar from "../../components/Avatar";
 
 // Status badge.
 const Pill = ({ s }) => {
@@ -58,29 +57,113 @@ const Pill = ({ s }) => {
   );
 };
 
-// Subscription status badge (employers only).
-const SubBadge = ({ status }) => {
-  const s = status || DEFAULT_SUBSCRIPTION_STATUS;
-  const cls =
-    s === "active"
-      ? "bg-green-100 text-green-700"
-      : s === "trial"
-        ? "bg-blue-100 text-blue-700"
-        : s === "past_due"
-          ? "bg-amber-100 text-amber-700"
-          : "bg-red-100 text-red-700";
+// Contract-IDs cell — small monospace pill list.
+const ContractIds = ({ ids }) => {
+  if (!ids?.length) return <span className="text-muted-foreground">—</span>;
   return (
-    <span
-      className={`text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded ${cls}`}
-    >
-      {SUBSCRIPTION_STATUS_LABELS[s] || s}
-    </span>
+    <div className="flex flex-wrap gap-1">
+      {ids.map((id) => (
+        <span
+          key={id}
+          className="font-mono text-[11px] px-1.5 py-0.5 bg-muted/40 rounded"
+        >
+          {id}
+        </span>
+      ))}
+    </div>
   );
 };
+
+// Table-based section for the Table view (employer / employee rows with
+// contract IDs, status badge and inline actions).
+const TableSection = ({
+  title,
+  rows,
+  contractsByUser,
+  onEdit,
+  onSetStatus,
+}) => (
+  <Card>
+    <h2 className="font-semibold text-primary mb-3">
+      {title} ({rows.length})
+    </h2>
+    {!rows.length ? (
+      <div className="text-sm text-muted-foreground py-4">None.</div>
+    ) : (
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left text-muted-foreground border-b border-border">
+              <th className="py-2 pr-3">Name</th>
+              <th className="pr-3">Email</th>
+              <th className="pr-3">Contract&nbsp;ID</th>
+              <th className="pr-3">Status</th>
+              <th className="text-right">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((u) => (
+              <tr
+                key={u.id}
+                className="border-b border-border last:border-0 align-top"
+              >
+                <td className="py-2 pr-3 font-medium">{u.fullName || "—"}</td>
+                <td className="pr-3 text-muted-foreground truncate max-w-[14rem]">
+                  {u.email}
+                </td>
+                <td className="pr-3">
+                  <ContractIds ids={contractsByUser[u.id]} />
+                </td>
+                <td className="pr-3">
+                  <Pill s={u.status} />
+                </td>
+                <td>
+                  <div className="flex justify-end gap-2 flex-wrap">
+                    <Button variant="outline" onClick={() => onEdit(u)}>
+                      <Pencil className="w-4 h-4 inline mr-1" /> Edit
+                    </Button>
+                    {u.status === STATUS.PENDING && (
+                      <Button
+                        onClick={() =>
+                          onSetStatus(u, STATUS.APPROVED, AUDIT.USER_APPROVED)
+                        }
+                      >
+                        Approve
+                      </Button>
+                    )}
+                    {u.status !== STATUS.DISABLED ? (
+                      <Button
+                        variant="danger"
+                        onClick={() =>
+                          onSetStatus(u, STATUS.DISABLED, AUDIT.USER_DISABLED)
+                        }
+                      >
+                        Disable
+                      </Button>
+                    ) : (
+                      <Button
+                        onClick={() =>
+                          onSetStatus(u, STATUS.ACTIVE, AUDIT.USER_REENABLED)
+                        }
+                      >
+                        Re-enable
+                      </Button>
+                    )}
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    )}
+  </Card>
+);
 
 export default function Users() {
   const { user, profile } = useAuth();
   const [users, setUsers] = useState([]);
+  const [contracts, setContracts] = useState([]);
   const [modal, setModal] = useState(false);
   const [f, setF] = useState({
     email: "",
@@ -126,6 +209,18 @@ export default function Users() {
     [],
   );
 
+  // Subscribe to contracts so we can show each user's contract IDs in the
+  // table view (employer rows, employee rows, contract ID column).
+  useEffect(
+    () =>
+      onSnapshot(
+        collection(db, COLLECTIONS.CONTRACTS),
+        (s) => setContracts(s.docs.map((d) => ({ id: d.id, ...d.data() }))),
+        () => {},
+      ),
+    [],
+  );
+
   // Tick countdown.
   useEffect(() => {
     if (!tempPw) return;
@@ -146,6 +241,21 @@ export default function Users() {
     () => users.filter((u) => u.role === ROLES.EMPLOYEE),
     [users],
   );
+
+  // Map each user → contract identifiers (prefer human-readable contractNo).
+  const contractsByUser = useMemo(() => {
+    const map = {};
+    for (const c of contracts) {
+      const label = c.contractNo || c.id;
+      const push = (uid) => {
+        if (!uid) return;
+        (map[uid] = map[uid] || []).push(label);
+      };
+      push(c.employerId);
+      push(c.employeeId);
+    }
+    return map;
+  }, [contracts]);
 
   // Create user via secondary auth.
   const onCreate = async (e) => {
@@ -303,52 +413,6 @@ export default function Users() {
     }
   };
 
-  // User row.
-  const Row = ({ u }) => (
-    <li className="py-3 flex items-center gap-3">
-      <Avatar fullName={u.fullName} photoURL={u.photoURL} size={36} />
-      <div className="flex-1 min-w-0">
-        <div className="font-medium truncate">{u.fullName}</div>
-        <div className="text-xs text-muted-foreground truncate">{u.email}</div>
-        {u.role === ROLES.EMPLOYER && (
-          <div className="flex items-center gap-1.5 mt-1 flex-wrap">
-            <span className="text-[10px] uppercase tracking-wide bg-accent/15 text-accent px-1.5 py-0.5 rounded">
-              {u.tier || DEFAULT_EMPLOYER_TIER}
-            </span>
-            <SubBadge status={u.subscriptionStatus} />
-          </div>
-        )}
-      </div>
-      <Pill s={u.status} />
-      <div className="flex gap-2">
-        <Button variant="outline" onClick={() => openEdit(u)}>
-          <Pencil className="w-4 h-4 inline mr-1" /> Edit
-        </Button>
-        {u.status === STATUS.PENDING && (
-          <Button
-            onClick={() => setStatus(u, STATUS.APPROVED, AUDIT.USER_APPROVED)}
-          >
-            Approve
-          </Button>
-        )}
-        {u.status !== STATUS.DISABLED ? (
-          <Button
-            variant="danger"
-            onClick={() => setStatus(u, STATUS.DISABLED, AUDIT.USER_DISABLED)}
-          >
-            Disable
-          </Button>
-        ) : (
-          <Button
-            onClick={() => setStatus(u, STATUS.ACTIVE, AUDIT.USER_REENABLED)}
-          >
-            Re-enable
-          </Button>
-        )}
-      </div>
-    </li>
-  );
-
   return (
     <Layout>
       <PageHeader
@@ -383,35 +447,21 @@ export default function Users() {
           </div>
         </Alert>
       )}
-      <div className="grid lg:grid-cols-2 gap-6">
-        <Card>
-          <h2 className="font-semibold text-primary mb-3">
-            Employers ({employers.length})
-          </h2>
-          {!employers.length ? (
-            <div className="text-sm text-muted-foreground py-4">None.</div>
-          ) : (
-            <ul className="divide-y divide-border">
-              {employers.map((u) => (
-                <Row key={u.id} u={u} />
-              ))}
-            </ul>
-          )}
-        </Card>
-        <Card>
-          <h2 className="font-semibold text-primary mb-3">
-            Employees ({employees.length})
-          </h2>
-          {!employees.length ? (
-            <div className="text-sm text-muted-foreground py-4">None.</div>
-          ) : (
-            <ul className="divide-y divide-border">
-              {employees.map((u) => (
-                <Row key={u.id} u={u} />
-              ))}
-            </ul>
-          )}
-        </Card>
+      <div className="space-y-6">
+        <TableSection
+          title="Employers"
+          rows={employers}
+          contractsByUser={contractsByUser}
+          onEdit={openEdit}
+          onSetStatus={setStatus}
+        />
+        <TableSection
+          title="Employees"
+          rows={employees}
+          contractsByUser={contractsByUser}
+          onEdit={openEdit}
+          onSetStatus={setStatus}
+        />
       </div>
 
       <Modal open={modal} onClose={() => setModal(false)} title="Create user">

@@ -2,7 +2,7 @@
 const FIXED = [
   [1, 1, "New Year's Day"],
   [5, 1, "Labour Day"],
-  [5, 8, "Test Day"],
+  [5, 21, "Test Day"],
   [6, 1, "Madaraka Day"],
   [10, 10, "Utamaduni Day"],
   [10, 20, "Mashujaa Day"],

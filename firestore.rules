@@ -107,14 +107,42 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
-    // Documents (contracts, payslips, IDs, policies, etc.)
-    // Uploaded by admin and assigned to a specific user via ownerId.
-    // The owner (employee) and the linked employer can read their documents;
-    // admin can read and manage all.
+    // Documents (contracts, payslips, statutory filings, IDs, policies, etc.)
+    // Uploaded by admin and scoped to a contract (employerId + employeeId)
+    // and/or a specific user via ownerId. Admin can read and manage all.
+    //
+    // Read access by document `type`:
+    //   - 'payslip'   → employer AND employee on the linked contract
+    //                   (also any explicit ownerId match).
+    //   - 'statutory' → employer ONLY (statutory filings are confidential
+    //                   to the employer; employee cannot read).
+    //   - all other types (contract, id, policy, etc.) → owner (employee)
+    //     and the linked employer.
     match /documents/{docId} {
       allow read: if isAdmin()
-        || (isSignedIn() && request.auth.uid == resource.data.ownerId)
-        || (isSignedIn() && request.auth.uid == resource.data.employerId);
+        || (
+          isSignedIn()
+          && resource.data.type == 'payslip'
+          && (
+            request.auth.uid == resource.data.employerId
+            || request.auth.uid == resource.data.employeeId
+            || request.auth.uid == resource.data.ownerId
+          )
+        )
+        || (
+          isSignedIn()
+          && resource.data.type == 'statutory'
+          && request.auth.uid == resource.data.employerId
+        )
+        || (
+          isSignedIn()
+          && resource.data.type != 'payslip'
+          && resource.data.type != 'statutory'
+          && (
+            request.auth.uid == resource.data.ownerId
+            || request.auth.uid == resource.data.employerId
+          )
+        );
       allow create, update, delete: if isAdmin();
     }
 

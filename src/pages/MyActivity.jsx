@@ -101,17 +101,17 @@ export default function MyActivity() {
         ) : (
           <ul className="divide-y divide-border">
             {filtered.map((i) => (
-              <li key={i.id} className="py-3 min-w-0">
-                <div className="text-sm font-medium capitalize break-words">
+              <li key={i.id} className="py-3">
+                <div className="text-sm font-medium capitalize">
                   {humanize(i.action)}
                 </div>
                 <div className="text-xs text-muted-foreground">
                   {formatTs(i.createdAt)}
                 </div>
                 {i.metadata && Object.keys(i.metadata).length > 0 && (
-                  <div className="text-xs text-muted-foreground mt-1 flex flex-wrap gap-x-3 gap-y-1 break-words">
+                  <div className="text-xs text-muted-foreground mt-1">
                     {Object.entries(i.metadata).map(([k, v]) => (
-                      <span key={k} className="break-words">
+                      <span key={k} className="mr-3">
                         <b>{humanize(k)}:</b> {String(v)}
                       </span>
                     ))}

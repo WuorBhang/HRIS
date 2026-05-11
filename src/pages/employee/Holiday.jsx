@@ -26,6 +26,7 @@ import {
 import Layout from "../../components/Layout";
 import MySubmissions from "../../components/MySubmissions";
 import UpcomingHolidays from "../../components/UpcomingHolidays";
+import ActivationGate from "../../components/ActivationGate";
 
 export default function Holiday() {
   const { user, profile } = useAuth();
@@ -109,50 +110,52 @@ export default function Holiday() {
         title="Holiday work"
         subtitle="Submit hours worked on a public holiday."
       />
-      <div className="grid lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 space-y-6">
-          <Card>
-            <Alert tone="error">{err}</Alert>
-            <Alert tone="success">{ok}</Alert>
-            <form onSubmit={onSubmit} className="space-y-4">
-              <Select
-                label="Public holiday"
-                value={holidayId}
-                onChange={setHolidayId}
-                required
-              >
-                <option value="">Pick a holiday…</option>
-                {holidays.map((h) => (
-                  <option key={h.id} value={h.id}>
-                    {formatDate(h.date)} — {h.name}
-                  </option>
-                ))}
-              </Select>
-              <Input
-                label="Hours"
-                type="number"
-                step="0.5"
-                min="0.5"
-                max="24"
-                value={hours}
-                onChange={setHours}
-                required
-              />
-              <Textarea
-                label="Notes"
-                value={notes}
-                onChange={setNotes}
-                rows={3}
-              />
-              <Button type="submit" disabled={busy}>
-                {busy ? "Submitting…" : "Submit"}
-              </Button>
-            </form>
-          </Card>
-          <MySubmissions mode="holiday" />
+      <ActivationGate>
+        <div className="grid lg:grid-cols-3 gap-6">
+          <div className="lg:col-span-2 space-y-6">
+            <Card>
+              <Alert tone="error">{err}</Alert>
+              <Alert tone="success">{ok}</Alert>
+              <form onSubmit={onSubmit} className="space-y-4">
+                <Select
+                  label="Public holiday"
+                  value={holidayId}
+                  onChange={setHolidayId}
+                  required
+                >
+                  <option value="">Pick a holiday…</option>
+                  {holidays.map((h) => (
+                    <option key={h.id} value={h.id}>
+                      {formatDate(h.date)} — {h.name}
+                    </option>
+                  ))}
+                </Select>
+                <Input
+                  label="Hours"
+                  type="number"
+                  step="0.5"
+                  min="0.5"
+                  max="24"
+                  value={hours}
+                  onChange={setHours}
+                  required
+                />
+                <Textarea
+                  label="Notes"
+                  value={notes}
+                  onChange={setNotes}
+                  rows={3}
+                />
+                <Button type="submit" disabled={busy}>
+                  {busy ? "Submitting…" : "Submit"}
+                </Button>
+              </form>
+            </Card>
+            <MySubmissions mode="holiday" />
+          </div>
+          <UpcomingHolidays />
         </div>
-        <UpcomingHolidays />
-      </div>
+      </ActivationGate>
     </Layout>
   );
 }
